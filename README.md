@@ -20,6 +20,8 @@ DSH 原生的状态点回答的是「AI 交回了没有」：待你、交回未�
 
 `dsh-better-tag` 补上这一层：标签说明这件事**属于什么**，「完成」章说明它**已经收尾**。两者都跟着会话走，重启后还在，发新消息时完成章自动解除。
 
+**0.2 起，标签库按 workspace 管理**：每个 workspace 有自己的一套标签，互不干扰；升级时原全局库会自动复制成每个 workspace 的初始词表。每个 workspace 还可以单独打开 **Agent 标签工具**——开启后，这个 workspace 里的会话会获得 `session_tags_library_list` / `session_tags_library_update` / `session_tags_get` / `session_tags_set` 四个模型工具，AI 可以自主查看和维护标签库、给自己的会话打标（不在库里的名字自动建标签）；没开启的 workspace，模型根本看不到这些工具。
+
 ## 一眼看懂
 
 | 位置 | 你会看到 |
@@ -28,12 +30,13 @@ DSH 原生的状态点回答的是「AI 交回了没有」：待你、交回未�
 | 行悬停 | 原生 hover 卡片里显示该会话的全部标签与完成章 |
 | 行悬停 / `…` 菜单 | ✓ 落章、取消章；「标签…」打开选择器（触屏兜底） |
 | 会话标题旁 | 最多 3 枚标签 + `+N`；点芯片或「+ 标签」直接增删 |
-| 侧栏「会话总览」 | 跨全部 workspace 平铺：状态计数、标签筛选、归档开关、点行进入会话 |
+| 侧栏「会话总览」 | 按 workspace 分组（可折叠，折叠状态跨刷新保留）：状态计数、每个分组内自己的标签筛选、归档开关、点行进入会话；有待处理会话的工作区自动置顶 |
 | 标签选择器 | 搜索/新建合一、勾选/取消、每行色点就地改色、管理标签、**临时标签**（不入标签库，随会话持久化） |
-| 管理标签 | 标签多时搜索、改名、色点改色、删除（级联移除所有引用） |
-| 标签包 | 导出 JSON 分享；导入按名字合并，冲突保留本地并报告 |
+| 管理标签 | 按 workspace 管理标签库：搜索、改名、色点改色、删除（级联移除所有引用）、导入/导出标签包、**Agent 标签工具开关** |
+| Agent 标签工具 | 每个 workspace 单独开关；开启后该 workspace 的会话获得 `session_tags_library_list` / `session_tags_library_update` / `session_tags_get` / `session_tags_set`，AI 可自主管理标签并给当前会话打标 |
+| 标签包 | 按 workspace 导出 JSON 分享；导入按名字合并，冲突保留本地并报告 |
 
-**不做**：AI 打标、存量批量回填、维度/单选规则、自动归档、多窗口实时推送。
+**不做**：存量批量回填、维度/单选规则、自动归档、多窗口实时推送。
 
 ## 截图
 
@@ -59,7 +62,7 @@ DSH 原生的状态点回答的是「AI 交回了没有」：待你、交回未�
 
 ### 会话总览（示例数据）
 
-跨全部 workspace 平铺：状态计数（待你 / AI 已交回 / 进行中 / 已完成 / 共）、按标签筛选、显示归档开关，点行直接进入会话；右上角是导出标签包、导入标签包和管理标签。
+按 workspace 分组：状态计数（待你 / AI 已交回 / 进行中 / 已完成 / 共）、显示归档开关，点行直接进入会话；组间按组内最紧急的会话排序，有待你 / 交回会话的工作区浮在最上面。点组头折叠/展开（折叠状态跨刷新保留）；每个分组有自己的标签筛选行，只筛本工作区的会话，多个工作区可以同时各筛各的；右上角进入管理标签。
 
 <img src="https://raw.githubusercontent.com/Diomchen/dsh-better-tag/main/docs/screenshots/overview.png" alt="会话总览：状态计数、标签筛选、归档开关与会话列表" width="1000">
 
@@ -71,13 +74,13 @@ DSH 原生的状态点回答的是「AI 交回了没有」：待你、交回未�
 
 ### 管理标签（示例数据）
 
-标签到 8 个以上才出现搜索，从选择器点进来会带上刚才的查询；搜索词表、改名、用色点浮层改色、删除；删除会级联移除所有会话上的引用。
+管理器顶部先选 workspace，标签库、导入/导出和 Agent 工具开关都作用于选中的 workspace。标签到 8 个以上才出现搜索，从选择器点进来会带上刚才的查询和对应 workspace；改名、用色点浮层改色、删除；删除会级联移除所有会话上的引用。打开「允许 Agent 管理标签」后，这个 workspace 的会话在下一次对话就能使用四个标签工具。
 
 <img src="https://raw.githubusercontent.com/Diomchen/dsh-better-tag/main/docs/screenshots/manage.png" alt="管理标签：标签多时的搜索、色点改色与删除" width="820">
 
 ### 标签包（示例数据）
 
-粘贴 JSON 或选择文件导入；导入按名字合并，并报告新增 / 跳过 / 冲突。导出是总览右上角的「导出标签包」，直接下载 JSON。
+粘贴 JSON 或选择文件导入；导入按名字合并进选中 workspace 的标签库，并报告新增 / 跳过 / 冲突。导出在管理器底部，直接下载该 workspace 的 JSON。
 
 <img src="https://raw.githubusercontent.com/Diomchen/dsh-better-tag/main/docs/screenshots/pack.png" alt="导入标签包：JSON 文本、选择文件和导入结果报告" width="820">
 
@@ -102,36 +105,38 @@ dsh plugin --profile web add github:Diomchen/dsh-better-tag
 
 ## 用法
 
-1. **贴标签**：悬停会话行，点「…」→「标签…」；或打开会话，点标题旁的「+ 标签」。顶部输入框既能搜索也能新建；每行色点直接改色，新建标签会自动分到一个不挤的颜色。
+1. **贴标签**：悬停会话行，点「…」→「标签…」；或打开会话，点标题旁的「+ 标签」。顶部输入框既能搜索也能新建；每行色点直接改色，新建标签会自动分到一个不挤的颜色。每个 workspace 有自己的标签库，选择器只显示当前会话所在 workspace 的词表。
 2. **落完成章**：悬停会话行点 ✓，或「…」菜单里选「落完成章」。它会一直留着，直到你发下一条消息或手动取消。
-3. **找回来**：点侧栏的「会话总览」，按「待你 / AI 已交回 / 进行中 / 已完成」计数看全局；点标签筛选，勾「显示归档」把归档会话也拉出来。
-4. **分享一套标签**：总览 →「导出标签包」；别人「导入标签包」后按名字合并，同名不同色会保留本地颜色并报告冲突。
-5. **随手记**：选择器里可以打**临时标签**——不入标签库、跟着这条会话存；常用的话点「固定」收进标签库。
+3. **找回来**：点侧栏的「会话总览」，按「待你 / AI 已交回 / 进行中 / 已完成」计数看全局；按 workspace 分组的标签筛选，勾「显示归档」把归档会话也拉出来。
+4. **让 AI 自己管标签**：总览 →「管理标签」→ 选中 workspace → 打开「允许 Agent 管理标签」。之后这个 workspace 里的会话就能用 `session_tags_library_list`（看标签库）、`session_tags_library_update`（建/改名/改色/删库标签）、`session_tags_get`（看本会话已贴的标签）、`session_tags_set`（给本会话打标，名字不在库里会自动建）。关掉开关，工具立刻从模型视野里消失。
+5. **分享一套标签**：管理器 →「导出标签包」；别人在选中 workspace 后「导入标签包」，按名字合并，同名不同色会保留本地颜色并报告冲突。
+6. **随手记**：选择器里可以打**临时标签**——不入标签库、跟着这条会话存；常用的话点「固定」收进标签库。
 
 ## 它怎么工作
 
-- **Host 半边**把标签与会话记录写成 `~/.dsh/storages/better-tag/state.json`（尊重 `DSH_HOME`），原子写、串行化，不写会话日志、不注册模型工具。
-- **Client 半边**通过同源回环接口 `/dsh-better-tag/v1/*` 读写；写入走乐观状态替换，窗口重新可见时重拉。
+- **Host 半边**把每个 workspace 的标签库与会话记录写成 `~/.dsh/storages/better-tag/state.json`（尊重 `DSH_HOME`），原子写、串行化，不写会话日志。0.1 的全局库在首次读取时迁移为「种子」，每个 workspace 的库在第一次被触及时从种子复制起步，之后各自演化。
+- **Client 半边**通过同源接口 `/dsh-better-tag/v1/*` 读写；每次落盘变更（包括 Agent 工具写入）都通过长轮询变更通道实时推送到所有打开的页面（对会缓冲流式响应的代理也可靠），无需手动刷新。
+- **Agent 标签工具**按 workspace 开关：开启时，工具注册到该 workspace 每个存活 agent 的 scoped context 上（`agent.ctx.tools.register`），agent 销毁自动卸载；没开启的 workspace 的 agent 从系统提示到执行管线都看不到这四个工具。
 - **完成章**监听 `api-session/activity`：会话出现新用户消息时自动解除。
 - **fork**：子会话继承父会话的标签（含临时标签），不继承完成章。优先包 `sessionController.fork`，并以 `session/created` 事件兜底。
 
 ## 数据与隐私
 
 - 数据只在本机：`~/.dsh/storages/better-tag/state.json`（或 `$DSH_HOME/storages/better-tag/state.json`）。
-- 回环接口只接受本机请求；所有写请求必须带自定义请求头 `x-better-tag: 1`，跨站页面无法在不触发预检的情况下伪造。
-- 不发网络请求、不调用模型、不读会话正文，也不改会话日志。
+- 接口由 DSH web server 的浏览器认证（会话 cookie）保护，本机与受信远程访问（如隧道/反代后的 GUI）都可用；所有写请求必须带自定义请求头 `x-better-tag: 1`，跨站页面无法在不触发预检的情况下伪造。
+- 不发网络请求、不读会话正文，也不改会话日志。Agent 标签工具只在对应 workspace 开启后注册；工具调用与其他模型工具一样记录在会话日志里。
 - 删掉插件不会自动删数据；要清空就删上面那个目录。
 
 ## 兼容性
 
-- DSH Web / Desktop **0.2.x**；在 **0.2.2-rc.3**（desktop profile）上开发和验证。
+- DSH Web / Desktop **0.2.x**；0.2.0 起在 **0.2.3-alpha.2** 上开发和验证（0.1.x 在 0.2.2-rc.3 上验证）。
 - Node.js **>= 22**；零运行时依赖、无构建步骤。
 - 支持中英文界面（跟随 DSH 语言设置）。
 
 ## 开发
 
 ```sh
-npm test        # 17 个宿主测试（store / HTTP / activation）
+npm test        # 33 个宿主测试（store / HTTP / activation）
 npm run check   # node --check 全部源文件
 npm pack --dry-run   # 看会发出去的包内容
 ```
@@ -142,19 +147,23 @@ npm pack --dry-run   # 看会发出去的包内容
 
 - 侧栏行尾是原生的「悬停即隐藏」装饰位：鼠标停在行上时，标签会让位给操作按钮，这是原生行为。
 - 标题旁插槽在窄窗口会被裁切，3 + `+N` 的上限可能需要按你的窗口宽度微调。
-- 多窗口不做实时同步，靠窗口重新聚焦时重拉。
+- 标签变化通过长轮询实时推送；推送中断时退化为窗口重新聚焦时重拉。
+- 会话从一个 workspace 挪到另一个 workspace 后，原库标签 id 在新库解析不到就不显示（迁移种子的同 id 副本除外）；临时标签跟着会话走，不受影响。
 - 数据只在本机，不含跨设备 / 多人同步。
 
 ## English
 
 **dsh-better-tag** puts flat tags on DeepSeek Harness sessions and adds a persistent *done* stamp that only you can set.
 
+- Per-workspace tag libraries: every workspace owns its vocabulary; an upgraded 0.1 global library seeds each workspace's starting copy.
+- Opt-in agent tag tools per workspace: flip the switch and sessions there get `session_tags_library_list` / `session_tags_library_update` / `session_tags_get` / `session_tags_set`, so the agent can read the library, maintain it, and tag its own session (unknown names auto-create). Workspaces without the switch never see the tools.
 - Tags in the sidebar row (before the timestamp), in the native hover card, and beside the session title.
 - A done stamp that survives restarts and clears itself when you send the next message.
-- A cross-workspace **session overview** with status counts (needs you / handed back / running / done), tag filters and an archive toggle.
-- Temporary per-session tags, named tag packs (JSON export/import), and tag management with cascade delete.
+- A **session overview** grouped by workspace — collapsible groups (state survives reloads), the group with the most urgent session floats to the top — with status counts, a tag filter inside each group, and an archive toggle.
+- Temporary per-session tags, named tag packs (JSON export/import per workspace), and tag management with cascade delete.
+- Live sync: every change — including agent tool writes — reaches all open pages through a long-poll change feed, no refresh needed.
 
-Install with `dsh plugin --profile web add dsh-better-tag` (or from **Settings → Plugins** in DSH Desktop), then restart `dsh web`. Data stays on this machine in `~/.dsh/storages/better-tag/state.json`; the plugin makes no network requests and never writes session logs. Tested on DSH 0.2.2-rc.3, Node.js >= 22, MIT licensed.
+Install with `dsh plugin --profile web add dsh-better-tag` (or from **Settings → Plugins** in DSH Desktop), then restart `dsh web`. Data stays on this machine in `~/.dsh/storages/better-tag/state.json`; the plugin makes no network requests and never writes session logs. The API follows the web server's own authentication, so remote access through a trusted proxy works like loopback. Tested on DSH 0.2.x, Node.js >= 22, MIT licensed.
 
 ## License
 
