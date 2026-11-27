@@ -73,6 +73,7 @@ window.__ModuleLoader__.load({
         menuClearTemp: '清除临时标签',
         noTags: '还没有标签，先新建一个。',
         workspace: '工作区',
+        settingsTitle: '设置',
         settingLimit: '侧栏标签数量',
         settingLimitHint: '会话行尾最多显示的标签数（0–5）；0 为不显示。悬停卡片与标题旁不受影响。',
         ungrouped: '未分组',
@@ -133,6 +134,7 @@ window.__ModuleLoader__.load({
         menuClearTemp: 'Clear temporary tags',
         noTags: 'No tags yet. Create one first.',
         workspace: 'Workspace',
+        settingsTitle: 'Settings',
         settingLimit: 'Sidebar tag chips',
         settingLimitHint: 'Max tag chips on a session row (0-5); 0 hides them. The hover card and title area are unaffected.',
         ungrouped: 'Ungrouped',
@@ -484,7 +486,7 @@ window.__ModuleLoader__.load({
       } catch { return {} }
     }
 
-    let ui = { manager: false, importOpen: false, managerQuery: '', managerKey: null, collapsed: loadCollapsed(), tagFilters: {} }
+    let ui = { manager: false, importOpen: false, settingsOpen: false, managerQuery: '', managerKey: null, collapsed: loadCollapsed(), tagFilters: {} }
     let uiSnapshot = ui
     const uiListeners = new Set()
     function commitUi (next) {
@@ -968,9 +970,14 @@ window.__ModuleLoader__.load({
             h('h2', { className: 'bt-panel-title' }, t('title')),
             h('div', { className: 'bt-panel-sub' }, t('subtitle'))),
           h('div', { className: 'bt-toolbar' },
+            tagLimitForm === null ? null : h('button', {
+              type: 'button', className: 'bt-btn bt-icon-btn',
+              title: t('settingsTitle'), 'aria-label': t('settingsTitle'),
+              onClick: () => commitUi({ settingsOpen: true }),
+            }, h(GearIcon, { size: 14 })),
             h('button', {
               type: 'button', className: 'bt-btn',
-              onClick: () => { commitUi({ manager: true, managerQuery: '', managerKey: groups[0]?.key ?? snap.workspaces?.[0]?.key ?? 'ungrouped' }) },
+              onClick: () => { commitUi({ manager: true, managerQuery: '', managerKey: sections[0]?.key ?? snap.workspaces?.[0]?.key ?? 'ungrouped' }) },
             }, t('manage')))),
         h('div', { className: 'bt-counts' },
           h('span', { className: 'bt-count is-pending' }, t('pending') + ' ', h('b', null, String(counts.pending))),
@@ -1043,7 +1050,8 @@ window.__ModuleLoader__.load({
           selectedKey: currentUi.managerKey,
           onSelectKey: key => commitUi({ managerKey: key }),
         }) : null,
-        currentUi.importOpen ? h(ImportModal, { importText, setImportText, onPick: pickFile, onRun: doImport, fileRef }) : null)
+        currentUi.importOpen ? h(ImportModal, { importText, setImportText, onPick: pickFile, onRun: doImport, fileRef }) : null,
+        currentUi.settingsOpen && tagLimitForm !== null ? h(SettingsModal) : null)
     }
 
     function ManagerModal ({ snap, initialQuery = '', selectedKey, onSelectKey }) {
@@ -1170,18 +1178,17 @@ window.__ModuleLoader__.load({
      */
     let tagLimitForm = null
 
-    function SettingsCard ({ view }) {
+    /** The sidebar-limit row, shared by the plugin's config page and the overview's settings modal. */
+    function TagLimitField () {
       const snap = useSyncExternalStore(
         listener => tagLimitForm.subscribe(listener),
         () => tagLimitForm.getSnapshot(),
       )
-      // The detail page also renders this slot as a description fallback;
-      // the form belongs on the full page view only.
-      if (view !== 'page' || snap.status === 'unavailable') return null
+      if (snap.status === 'unavailable') return null
       const raw = snap.value?.sidebarTagLimit
       const value = Number.isInteger(raw) ? Math.max(0, Math.min(5, raw)) : 2
       const disabled = snap.status !== 'ready' || snap.writable !== true
-      return h('div', { className: 'bt-settings' },
+      return h(React.Fragment, null,
         h('label', { className: 'bt-settings-row' },
           h('span', { className: 'bt-settings-label' }, t('settingLimit')),
           h('select', {
@@ -1194,6 +1201,30 @@ window.__ModuleLoader__.load({
             },
           }, [0, 1, 2, 3, 4, 5].map(n => h('option', { key: n, value: String(n) }, String(n))))),
         h('div', { className: 'bt-settings-hint' }, t('settingLimitHint')))
+    }
+
+    function SettingsCard ({ view }) {
+      // The detail page also renders this slot as a description fallback;
+      // the form belongs on the full page view only.
+      if (view !== 'page' || tagLimitForm === null) return null
+      return h('div', { className: 'bt-settings' }, h(TagLimitField))
+    }
+
+    function SettingsModal () {
+      return h('div', { className: 'bt-modal-back', onMouseDown: event => { if (event.target === event.currentTarget) commitUi({ settingsOpen: false }) } },
+        h('div', { className: 'bt-modal bt-settings-modal' },
+          h('div', { className: 'bt-modal-head' }, t('settingsTitle')),
+          h(TagLimitField),
+          h('div', { className: 'bt-modal-foot' },
+            h('button', { type: 'button', className: 'bt-btn', onClick: () => commitUi({ settingsOpen: false }) }, t('close')))))
+    }
+
+    function GearIcon ({ size = 14 }) {
+      return h('svg', { viewBox: '0 0 16 16', width: size, height: size, 'aria-hidden': true },
+        h('path', {
+          d: 'M8 5.4A2.6 2.6 0 1 0 8 10.6 2.6 2.6 0 0 0 8 5.4zm5.4 2.6c0-.4 0-.7-.1-1l1.3-1a.5.5 0 0 0 .1-.7l-1.2-2a.5.5 0 0 0-.6-.2l-1.5.6a5 5 0 0 0-1.7-1L9.4 1.5a.5.5 0 0 0-.5-.4H6.9a.5.5 0 0 0-.5.4l-.3 1.7a5 5 0 0 0-1.7 1l-1.5-.6a.5.5 0 0 0-.6.2l-1.2 2a.5.5 0 0 0 .1.7l1.3 1a5.6 5.6 0 0 0 0 2l-1.3 1a.5.5 0 0 0-.1.7l1.2 2c.1.2.4.3.6.2l1.5-.6a5 5 0 0 0 1.7 1l.3 1.7c0 .2.3.4.5.4h2.1c.2 0 .4-.2.5-.4l.3-1.7a5 5 0 0 0 1.7-1l1.5.6c.2.1.5 0 .6-.2l1.2-2a.5.5 0 0 0-.1-.7l-1.3-1c.1-.3.1-.6.1-1z',
+          fill: 'none', stroke: 'currentColor', strokeWidth: 1.2, strokeLinejoin: 'round',
+        }))
     }
 
     function PanelIcon () {
@@ -1268,6 +1299,8 @@ window.__ModuleLoader__.load({
 .bt-link{border:0;background:transparent;color:var(--dsw-alias-text-3,rgba(127,127,127,.95));font:inherit;font-size:12px;text-align:left;padding:4px;cursor:pointer;text-decoration:underline}
 .bt-swatch{width:8px;height:8px;border-radius:2px;flex:0 0 auto}
 .bt-settings{padding:10px 2px 2px}
+.bt-settings-modal{width:min(420px,90vw)}
+.bt-icon-btn{display:inline-flex;align-items:center;justify-content:center;padding:0 8px}
 .bt-settings-row{display:flex;align-items:center;gap:10px}
 .bt-settings-label{font-size:12.5px}
 .bt-settings-select{width:76px;height:26px;flex:0 0 auto}
