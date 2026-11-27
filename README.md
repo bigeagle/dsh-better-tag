@@ -26,7 +26,7 @@ DSH 原生的状态点回答的是「AI 交回了没有」：待你、交回未�
 
 | 位置 | 你会看到 |
 | --- | --- |
-| 侧栏行尾 | 最多 2 枚标签 + `+N`，排在时间之前；只读，不抢原生按钮 |
+| 侧栏行尾 | 默认 2 枚标签 + `+N`，排在时间之前；数量可在设置里调（0–5，0 为不显示）；只读，不抢原生按钮 |
 | 行悬停 | 原生 hover 卡片里显示该会话的全部标签 |
 | 行悬停 / `…` 菜单 | ✓ 落章、取消章；「标签…」打开选择器（触屏兜底） |
 | 会话标题旁 | 最多 3 枚标签 + `+N`；点芯片或「+ 标签」直接增删 |
@@ -114,6 +114,7 @@ dsh plugin --profile web add github:Diomchen/dsh-better-tag
 ## 它怎么工作
 
 - **Host 半边**把每个 workspace 的标签库与会话记录写成 `~/.dsh/storages/better-tag/state.json`（尊重 `DSH_HOME`），原子写、串行化，不写会话日志。0.1 的全局库在首次读取时迁移为「种子」，每个 workspace 的库在第一次被触及时从种子复制起步，之后各自演化。
+- **设置**：插件配置页（插件面板 → dsh-better-tag）提供「sidebarTagLimit」——侧栏行尾标签数量上限（0–5，默认 2，0 为不显示）；改动即时生效，不用刷新。悬停卡片与标题旁不受此限。
 - **Client 半边**通过同源接口 `/dsh-better-tag/v1/*` 读写；每次落盘变更（包括 Agent 工具写入）都通过长轮询变更通道实时推送到所有打开的页面（对会缓冲流式响应的代理也可靠），无需手动刷新。
 - **Agent 标签工具**按 workspace 开关：开启时，工具注册到该 workspace 每个存活 agent 的 scoped context 上（`agent.ctx.tools.register`），agent 销毁自动卸载；没开启的 workspace 的 agent 从系统提示到执行管线都看不到这四个工具。
 - **fork**：子会话继承父会话的标签（含临时标签）。优先包 `sessionController.fork`，并以 `session/created` 事件兜底。
@@ -155,7 +156,7 @@ npm pack --dry-run   # 看会发出去的包内容
 
 - Per-workspace tag libraries: every workspace owns its vocabulary; an upgraded 0.1 global library seeds each workspace's starting copy.
 - Opt-in agent tag tools per workspace: flip the switch and sessions there get `session_tags_library_list` / `session_tags_library_update` / `session_tags_get` / `session_tags_set`, so the agent can read the library, maintain it, and tag its own session (unknown names auto-create). Workspaces without the switch never see the tools.
-- Tags in the sidebar row (before the timestamp), in the native hover card, and beside the session title.
+- Tags in the sidebar row (before the timestamp; a plugin setting caps the row at 0-5 chips, 0 hides them), in the native hover card, and beside the session title.
 - A **session overview** grouped by workspace — collapsible groups (state survives reloads), the group with the most urgent session floats to the top — with status counts, a tag filter inside each group, and an archive toggle.
 - Temporary per-session tags, named tag packs (JSON export/import per workspace), and tag management with cascade delete.
 - Live sync: every change — including agent tool writes — reaches all open pages through a long-poll change feed, no refresh needed.

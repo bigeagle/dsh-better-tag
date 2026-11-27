@@ -73,6 +73,8 @@ window.__ModuleLoader__.load({
         menuClearTemp: '清除临时标签',
         noTags: '还没有标签，先新建一个。',
         workspace: '工作区',
+        settingLimit: '侧栏标签数量',
+        settingLimitHint: '会话行尾最多显示的标签数（0–5）；0 为不显示。悬停卡片与标题旁不受影响。',
         ungrouped: '未分组',
         agentTools: '允许 Agent 管理标签',
         agentToolsHint: '开启后，这个工作区的会话获得 session_tags_library_list/update 与 session_tags_get/set 四个工具',
@@ -131,6 +133,8 @@ window.__ModuleLoader__.load({
         menuClearTemp: 'Clear temporary tags',
         noTags: 'No tags yet. Create one first.',
         workspace: 'Workspace',
+        settingLimit: 'Sidebar tag chips',
+        settingLimitHint: 'Max tag chips on a session row (0-5); 0 hides them. The hover card and title area are unaffected.',
         ungrouped: 'Ungrouped',
         agentTools: 'Let the agent manage tags',
         agentToolsHint: 'When on, sessions in this workspace get the session_tags_library_list/update and session_tags_get/set tools',
@@ -166,7 +170,7 @@ window.__ModuleLoader__.load({
 
     let view = {
       version: 0, libraries: {}, sessions: {}, sessionWorkspaces: {}, workspaces: [],
-      phase: 'loading', error: null, notice: null,
+      settings: {}, phase: 'loading', error: null, notice: null,
     }
     let snapshot = view
     const listeners = new Set()
@@ -224,6 +228,7 @@ window.__ModuleLoader__.load({
         sessions: json.sessions ?? view.sessions,
         sessionWorkspaces: json.sessionWorkspaces ?? view.sessionWorkspaces,
         workspaces: json.workspaces ?? view.workspaces,
+        settings: json.settings ?? view.settings,
         phase: 'ready',
         error: null,
       })
@@ -624,12 +629,15 @@ window.__ModuleLoader__.load({
     /* ------------------------------------------------------------------ */
 
     function RowTags ({ sessionId }) {
-      const { tags } = useSessionMeta(sessionId)
-      if (tags.length === 0) return null
-      const shown = tags.slice(0, 2)
+      const { tags, snap } = useSessionMeta(sessionId)
+      // The row is the title's space first: the settings page caps how many
+      // chips show here (0 hides them); the hover card always lists all.
+      const limit = snap.settings?.sidebarTagLimit ?? 2
+      if (limit <= 0 || tags.length === 0) return null
+      const shown = tags.slice(0, limit)
       return h('span', { className: 'bt-row-tags' },
         shown.map(tag => h(Chip, { key: tag.key, tag })),
-        tags.length > 2 ? h('span', { className: 'bt-more' }, `+${tags.length - 2}`) : null)
+        tags.length > limit ? h('span', { className: 'bt-more' }, `+${tags.length - limit}`) : null)
     }
 
     /* ------------------------------------------------------------------ */
@@ -1154,6 +1162,40 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', className: 'bt-btn is-primary', onClick: onRun }, t('importRun')))))
     }
 
+    /**
+     * The plugin's configuration card on its Plugins detail page
+     * (`plugins.row.config`). Reads and writes the Host settings namespace
+     * `dsh-better-tag` through the configForms service; the sidebar picks the
+     * new limit up through this window's refresh plus the change feed's poke.
+     */
+    let tagLimitForm = null
+
+    function SettingsCard ({ view }) {
+      const snap = useSyncExternalStore(
+        listener => tagLimitForm.subscribe(listener),
+        () => tagLimitForm.getSnapshot(),
+      )
+      // The detail page also renders this slot as a description fallback;
+      // the form belongs on the full page view only.
+      if (view !== 'page' || snap.status === 'unavailable') return null
+      const raw = snap.value?.sidebarTagLimit
+      const value = Number.isInteger(raw) ? Math.max(0, Math.min(5, raw)) : 2
+      const disabled = snap.status !== 'ready' || snap.writable !== true
+      return h('div', { className: 'bt-settings' },
+        h('label', { className: 'bt-settings-row' },
+          h('span', { className: 'bt-settings-label' }, t('settingLimit')),
+          h('select', {
+            className: 'bt-input bt-settings-select',
+            value: String(value),
+            disabled,
+            onChange: event => {
+              const next = Number(event.target.value)
+              void tagLimitForm.set('sidebarTagLimit', next).then(ok => { if (ok) void refresh() })
+            },
+          }, [0, 1, 2, 3, 4, 5].map(n => h('option', { key: n, value: String(n) }, String(n))))),
+        h('div', { className: 'bt-settings-hint' }, t('settingLimitHint')))
+    }
+
     function PanelIcon () {
       return h(TagIcon, { size: 16 })
     }
@@ -1225,7 +1267,11 @@ window.__ModuleLoader__.load({
 .bt-btn.bt-danger{color:#f07a7a;border-color:rgba(240,122,122,.4)}
 .bt-link{border:0;background:transparent;color:var(--dsw-alias-text-3,rgba(127,127,127,.95));font:inherit;font-size:12px;text-align:left;padding:4px;cursor:pointer;text-decoration:underline}
 .bt-swatch{width:8px;height:8px;border-radius:2px;flex:0 0 auto}
-.bt-per{display:none}
+.bt-settings{padding:10px 2px 2px}
+.bt-settings-row{display:flex;align-items:center;gap:10px}
+.bt-settings-label{font-size:12.5px}
+.bt-settings-select{width:76px;height:26px;flex:0 0 auto}
+.bt-settings-hint{font-size:11px;color:var(--dsw-alias-text-3,rgba(127,127,127,.9));margin-top:6px}
 .bt-panel{padding:20px 24px 40px;height:100%;overflow:auto;color:var(--dsw-alias-text-1,inherit)}
 .bt-panel-head{display:flex;align-items:flex-start;gap:12px;margin-bottom:10px;flex-wrap:wrap}
 .bt-panel-title{margin:0;font-size:16px;font-weight:600}
@@ -1383,6 +1429,15 @@ window.__ModuleLoader__.load({
         name: 'sidebar.panellist', id: PANEL_ID, order: 55, locale: NS,
         label: () => t('nav'),
       }, PanelIcon)
+
+      try {
+        tagLimitForm = ctx.get?.('configForms')?.get?.('dsh-better-tag') ?? null
+      } catch { tagLimitForm = null }
+      if (tagLimitForm !== null) {
+        contribute('plugins.row.config', {
+          name: 'plugins.row.config', key: 'dsh-better-tag#dsh-better-tag', locale: NS,
+        }, SettingsCard)
+      }
 
       void refresh()
 

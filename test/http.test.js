@@ -29,12 +29,13 @@ async function withServer (run, options = {}) {
     resolveKey: sessionId => (WORKSPACES.find(ws => ws.sessionIds.includes(sessionId))?.key ?? 'ungrouped'),
     workspaces: () => WORKSPACES,
     onAgentTools: (key, enabled) => { agentToolsCalls.push([key, enabled]) },
+    settings: () => ({ sidebarTagLimit: 3 }),
     ...options,
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const base = `http://127.0.0.1:${server.address().port}/better-tag`
   try {
-    await run({ base, store, agentToolsCalls })
+    await run({ base, store, agentToolsCalls, poke: () => dispose.poke?.() })
   } finally {
     dispose()
     await new Promise(resolve => server.close(resolve))
@@ -64,6 +65,7 @@ test('serves state with libraries for every workspace and rejects writes without
       { key: 'ws-a', title: 'Alpha' },
       { key: 'ws-b', title: 'Beta' },
     ])
+    assert.deepEqual(state.json.settings, { sidebarTagLimit: 3 })
 
     const denied = await fetch(base + '/tags', {
       method: 'POST',
@@ -157,6 +159,7 @@ test('the events long-poll answers immediately when behind and holds until a wri
     assert.equal(behind.status, 200)
     assert.equal(behind.json.changed, true)
     assert.deepEqual(behind.json.libraries['ws-a'], { tags: [], agentTools: false })
+    assert.deepEqual(behind.json.settings, { sidebarTagLimit: 3 })
     assert.deepEqual(behind.json.sessionWorkspaces, { s1: 'ws-a', s2: 'ws-a', s3: 'ws-b' })
     const version = behind.json.version
 
@@ -173,6 +176,20 @@ test('the events long-poll answers immediately when behind and holds until a wri
     // loopback POST has been observed taking >250ms.
     const idle = await call(base, `/events?since=${woken.json.version}`)
     assert.equal(idle.json.changed, false)
+  }, { eventsHoldMs: 1500 })
+})
+
+test('a poke wakes held long-polls without a store write', async () => {
+  await withServer(async ({ base, poke }) => {
+    const behind = await call(base, '/events?since=0')
+    const held = call(base, `/events?since=${behind.json.version}`)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    poke()
+    const woken = await held
+    assert.equal(woken.json.changed, true)
+    // Same store version: the wake exists to deliver fresh settings.
+    assert.equal(woken.json.version, behind.json.version)
+    assert.deepEqual(woken.json.settings, { sidebarTagLimit: 3 })
   }, { eventsHoldMs: 1500 })
 })
 

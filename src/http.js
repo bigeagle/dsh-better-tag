@@ -60,6 +60,7 @@ function send (res, status, json) {
  *   resolveKey?: (sessionId: string) => string|Promise<string>,
  *   workspaces?: () => Array<{ key: string, title: string, sessionIds?: string[] }>,
  *   onAgentTools?: (workspaceKey: string, enabled: boolean) => void,
+ *   settings?: () => object,
  *   eventsHoldMs?: number }} options - dependencies.
  * @returns a disposer.
  */
@@ -71,6 +72,7 @@ export function registerLocalApi ({
   resolveKey = () => 'ungrouped',
   workspaces = () => [],
   onAgentTools = () => {},
+  settings = () => ({}),
   eventsHoldMs = DEFAULT_EVENTS_HOLD_MS,
 } = {}) {
   if (webServer?.register === undefined) throw new Error('webServer is unavailable')
@@ -79,6 +81,7 @@ export function registerLocalApi ({
     active.resolveKey = resolveKey
     active.workspaces = workspaces
     active.onAgentTools = onAgentTools
+    active.settings = settings
     active.holdMs = eventsHoldMs
     subscribeStore(active)
     return () => {
@@ -99,6 +102,7 @@ export function registerLocalApi ({
       ...stateNow,
       sessionWorkspaces,
       workspaces: known.map(entry => ({ key: entry.key, title: entry.title })),
+      settings: live.settings(),
     }
   }
 
@@ -137,11 +141,15 @@ export function registerLocalApi ({
     })
   }
 
-  /** Wake every long-poll waiter whose baseline the store has passed. */
-  function broadcast (registration) {
+  /**
+   * Wake long-poll waiters: on a store change only those whose baseline the
+   * version passed; a forced poke (settings edits bump no store version)
+   * wakes every waiter so open pages pick the new settings up live.
+   */
+  function broadcast (registration, force = false) {
     const version = registration.store?.state?.().version ?? 0
     for (const waiter of [...registration.waiters]) {
-      if (version > waiter.since) waiter.settle(true)
+      if (force || version > waiter.since) waiter.settle(true)
     }
   }
 
@@ -153,7 +161,7 @@ export function registerLocalApi ({
   }
 
   const registration = {
-    webServer, path: base, store, resolveKey, workspaces, onAgentTools,
+    webServer, path: base, store, resolveKey, workspaces, onAgentTools, settings,
     waiters: new Set(), unsubscribe: null, holdMs: eventsHoldMs,
     dispose: null,
   }
@@ -250,11 +258,14 @@ export function registerLocalApi ({
 
   registration.dispose = dispose
   active = registration
-  return () => {
+  const disposeAll = () => {
     try { registration.unsubscribe?.() } catch { /* ignore */ }
     // Release held long-polls so unload never waits on open requests.
     for (const waiter of [...registration.waiters]) waiter.settle(false)
     try { dispose() } catch { /* ignore */ }
     if (active === registration) active = null
   }
+  /** Wake every held long-poll so clients re-read the snapshot (settings edits). */
+  disposeAll.poke = () => broadcast(registration, true)
+  return disposeAll
 }

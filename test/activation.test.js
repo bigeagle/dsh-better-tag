@@ -115,6 +115,8 @@ test('state maps sessions to workspaces and materializes their libraries', async
       { key: 'ws-1', title: 'One' },
       { key: 'ws-2', title: 'Two' },
     ])
+    // No loader config in tests: the settings snapshot carries the default.
+    assert.deepEqual(state.settings, { sidebarTagLimit: 2 })
   } finally {
     await plugin.close()
   }

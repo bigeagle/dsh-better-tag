@@ -10,12 +10,18 @@
 
 import os from 'node:os'
 import path from 'node:path'
+import z from '@deepseek-ai/schemastery'
 import { createStore, UNGROUPED } from './src/store.js'
 import { registerLocalApi } from './src/http.js'
 import { createTagTools } from './src/tools.js'
 
 export const name = 'dsh-better-tag'
 export const inject = ['webServer']
+
+export const Config = z.object({
+  /** Tag chips shown on one sidebar session row; 0 hides them, the rest collapse into +N. */
+  sidebarTagLimit: z.number().step(1).min(0).max(5).default(2).volatile(),
+})
 
 function storeDir () {
   const home = process.env.DSH_HOME
@@ -28,10 +34,16 @@ function storeDir () {
  * @param {object} ctx - Cordis plugin context.
  * @returns a disposer that releases every registration.
  */
-export function apply (ctx) {
+export function apply (ctx, config) {
   const log = console
   const store = createStore({ dir: storeDir(), log })
   const disposers = []
+
+  // Volatile config fields are readonly references that track live settings
+  // edits; a direct apply without the loader (tests) gets the default.
+  const settings = () => ({
+    sidebarTagLimit: config?.sidebarTagLimit?.get?.() ?? 2,
+  })
 
   /**
    * The library key of one Session: the id of the workspace accounting it,
@@ -114,16 +126,31 @@ export function apply (ctx) {
     }
   }
 
-  disposers.push(registerLocalApi({
+  const api = registerLocalApi({
     webServer: ctx.webServer,
     store,
     log,
     resolveKey: workspaceKeyOf,
     workspaces: workspaceEntries,
+    settings,
     onAgentTools: key => {
       void syncWorkspaceTools(key).catch(error => log.warn?.(`[better-tag] agent tools sync failed: ${error.message}`))
     },
-  }))
+  })
+  disposers.push(api)
+
+  // Volatile config exposes no change event, so a cheap fingerprint poll
+  // pokes the change feed when a settings edit lands; open pages re-read the
+  // snapshot and apply the new limits without a reload.
+  let lastSettings = JSON.stringify(settings())
+  const settingsWatch = setInterval(() => {
+    const now = JSON.stringify(settings())
+    if (now === lastSettings) return
+    lastSettings = now
+    try { api.poke?.() } catch { /* ignore */ }
+  }, 1500)
+  settingsWatch.unref?.()
+  disposers.push(() => clearInterval(settingsWatch))
 
   try {
     disposers.push(ctx.on('agent/created', async ({ agent }) => {

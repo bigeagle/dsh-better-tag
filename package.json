@@ -1,6 +1,6 @@
 {
   "name": "dsh-better-tag",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "会话标签：per-workspace 标签库、侧栏标签、标题旁编辑、跨 workspace 总览，可选 Agent 标签工具。 · Per-workspace session tags and opt-in agent tag tools for DeepSeek Harness.",
   "type": "module",
   "main": "index.js",
@@ -64,5 +64,11 @@
     "test": "node --test test/*.test.js",
     "check": "node --check index.js && node --check client.js && node --check src/store.js && node --check src/http.js && node --check src/tools.js",
     "prepack": "npm run check && npm test"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "*"
+  },
+  "devDependencies": {
+    "@deepseek-ai/schemastery": "*"
   }
 }
