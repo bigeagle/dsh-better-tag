@@ -1,15 +1,18 @@
 /**
  * Host half of dsh-better-tag.
  *
- * Owns the durable tag store and its loopback API. It never writes Session
- * logs, never registers a model-facing tool, and never touches the agent loop:
- * tags and the done stamp belong to the human.
+ * Owns the durable per-workspace tag stores and their same-origin API. It
+ * never writes Session logs and never touches the agent loop: tags and the
+ * done stamp belong to the human. When a workspace flips its model-tools
+ * switch on, the four tag tools attach to the scoped context of every agent
+ * in that workspace — and only there — so agents elsewhere never see them.
  */
 
 import os from 'node:os'
 import path from 'node:path'
-import { createStore } from './src/store.js'
+import { createStore, UNGROUPED } from './src/store.js'
 import { registerLocalApi } from './src/http.js'
+import { createTagTools } from './src/tools.js'
 
 export const name = 'dsh-better-tag'
 export const inject = ['webServer']
@@ -30,7 +33,120 @@ export function apply (ctx) {
   const store = createStore({ dir: storeDir(), log })
   const disposers = []
 
-  disposers.push(registerLocalApi({ webServer: ctx.webServer, store, log }))
+  /**
+   * The library key of one Session: the id of the workspace accounting it,
+   * or the shared ungrouped bucket when no registered workspace claims it.
+   *
+   * Workspace membership lives in the registry's durable record, and a
+   * brand-new Session reaches `agent/created` (and its first tag writes)
+   * before the controller accounts it there. Fall back to the Session's
+   * canonical cwd — the same equality the registry itself uses to match
+   * membership — so new Sessions resolve to their workspace immediately.
+   */
+  const workspaceKeyOf = sessionId => {
+    try {
+      const workspaces = ctx.get('workspaceRegistry')?.list?.() ?? []
+      for (const workspace of workspaces) {
+        if ((workspace.sessionIds ?? []).includes(sessionId)) return String(workspace.id)
+      }
+      const cwd = ctx.get('sessions')?.get?.(sessionId)?.header?.cwd
+      if (typeof cwd === 'string' && cwd !== '') {
+        const needle = cwd.replace(/\/+$/, '')
+        for (const workspace of workspaces) {
+          if (String(workspace.path ?? '').replace(/\/+$/, '') === needle) return String(workspace.id)
+        }
+      }
+    } catch (error) {
+      log.warn?.(`[better-tag] workspace lookup failed: ${error.message}`)
+    }
+    return UNGROUPED
+  }
+
+  const workspaceEntries = () => {
+    try {
+      return (ctx.get('workspaceRegistry')?.list?.() ?? []).map(workspace => ({
+        key: String(workspace.id),
+        title: workspace.title,
+        sessionIds: [...(workspace.sessionIds ?? [])].map(String),
+      }))
+    } catch {
+      return []
+    }
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* model tools: attached per agent while its workspace enables them    */
+  /* ------------------------------------------------------------------ */
+
+  const toolDefinitions = createTagTools({ store, resolveKey: workspaceKeyOf, log })
+  /** agentId -> disposer removing that agent's four tag tools. */
+  const attached = new Map()
+
+  const attachTools = agent => {
+    const id = String(agent?.id ?? '')
+    if (id === '' || attached.has(id)) return
+    const own = []
+    try {
+      for (const definition of toolDefinitions) own.push(agent.ctx.tools.register(definition))
+    } catch (error) {
+      for (const dispose of own.reverse()) { try { dispose() } catch { /* ignore */ } }
+      log.warn?.(`[better-tag] tool registration for agent ${id} failed: ${error.message}`)
+      return
+    }
+    attached.set(id, () => {
+      for (const dispose of own.reverse()) { try { dispose() } catch { /* ignore */ } }
+    })
+  }
+
+  const detachTools = agentId => {
+    const dispose = attached.get(agentId)
+    attached.delete(agentId)
+    try { dispose?.() } catch { /* ignore */ }
+  }
+
+  /** Bring every live agent of one workspace to that workspace's switch state. */
+  const syncWorkspaceTools = async key => {
+    const enabled = await store.agentToolsEnabled(key)
+    for (const agent of ctx.get('agents')?.list?.() ?? []) {
+      if (workspaceKeyOf(String(agent.id)) !== key) continue
+      if (enabled) attachTools(agent)
+      else detachTools(String(agent.id))
+    }
+  }
+
+  disposers.push(registerLocalApi({
+    webServer: ctx.webServer,
+    store,
+    log,
+    resolveKey: workspaceKeyOf,
+    workspaces: workspaceEntries,
+    onAgentTools: key => {
+      void syncWorkspaceTools(key).catch(error => log.warn?.(`[better-tag] agent tools sync failed: ${error.message}`))
+    },
+  }))
+
+  try {
+    disposers.push(ctx.on('agent/created', async ({ agent }) => {
+      if (await store.agentToolsEnabled(workspaceKeyOf(String(agent.id)))) attachTools(agent)
+    }))
+    disposers.push(ctx.on('agent/disposed', ({ agent }) => {
+      // The agent scope already unwound its registrations; drop our record.
+      attached.delete(String(agent.id))
+    }))
+  } catch (error) {
+    log.warn?.(`[better-tag] agent listeners failed: ${error.message}`)
+  }
+
+  // Agents that went live before this plugin loaded (hot reload) still get
+  // their workspace's tools.
+  void store.ready
+    .then(async () => {
+      const keys = Object.entries(store.state().libraries)
+        .filter(([, library]) => library.agentTools === true)
+        .map(([key]) => key)
+      for (const key of keys) await syncWorkspaceTools(key)
+    })
+    .catch(error => log.warn?.(`[better-tag] initial agent tools sync failed: ${error.message}`))
 
   try {
     disposers.push(ctx.on('api-session/activity', sessionId => {
@@ -43,7 +159,8 @@ export function apply (ctx) {
   try {
     disposers.push(ctx.on('session/created', session => {
       const live = () => ctx.get('sessions')?.list?.() ?? []
-      void store.inheritFork(session, live).catch(error => log.warn?.(`[better-tag] fork inherit failed: ${error.message}`))
+      void store.inheritFork(session, live, workspaceKeyOf)
+        .catch(error => log.warn?.(`[better-tag] fork inherit failed: ${error.message}`))
     }))
   } catch (error) {
     log.warn?.(`[better-tag] created listener failed: ${error.message}`)
@@ -63,7 +180,8 @@ export function apply (ctx) {
       const patched = async request => {
         const value = await original.call(controller, request)
         try {
-          await store.copyTags(String(request.sessionId), String(value.sessionId))
+          const childId = String(value.sessionId)
+          await store.copyTags(String(request.sessionId), childId, workspaceKeyOf(childId))
         } catch (error) {
           log.warn?.(`[better-tag] fork copy failed: ${error.message}`)
         }
@@ -84,6 +202,7 @@ export function apply (ctx) {
     for (const dispose of disposers.reverse()) {
       try { dispose() } catch { /* ignore */ }
     }
+    for (const agentId of [...attached.keys()]) detachTools(agentId)
   }
 
   try {
