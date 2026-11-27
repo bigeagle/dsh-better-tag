@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "会话标签",
-    "description": "按 workspace 管理的会话标签与持久的「完成」章：侧栏行尾、悬停卡片与标题旁都能看到标签，跨全部 workspace 的会话总览按状态计数、按标签筛选，还可为每个 workspace 单独开启 Agent 标签工具（session_tags_library_list/update 与 session_tags_get/set）。",
+    "description": "按 workspace 管理的会话标签：侧栏行尾、悬停卡片与标题旁都能看到标签，会话总览按 workspace 分组、可折叠、每组用自己的标签库筛选，还可为每个 workspace 单独开启 Agent 标签工具（session_tags_library_list/update 与 session_tags_get/set）。",
     "detail": "docs/DETAIL.zh.md"
   }
 }

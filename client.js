@@ -1,8 +1,8 @@
 /**
  * Client half of dsh-better-tag.
  *
- * One module-level snapshot feeds every seat: sidebar row chips, the done
- * button, the row menu, the title-adjacent tag editor, and the overview panel.
+ * One module-level snapshot feeds every seat: sidebar row chips, the row
+ * menu, the title-adjacent tag editor, and the overview panel.
  * Writes replace the snapshot with the response, and the Host's long-poll
  * change feed pushes every committed change (including agent tool writes) to
  * every open page, so all seats stay live without a manual refresh.
@@ -43,7 +43,6 @@ window.__ModuleLoader__.load({
         pending: '待你',
         unread: 'AI 已交回',
         running: '进行中',
-        done: '已完成',
         idle: '空闲',
         showArchived: '显示归档',
         total: '共',
@@ -77,8 +76,6 @@ window.__ModuleLoader__.load({
         ungrouped: '未分组',
         agentTools: '允许 Agent 管理标签',
         agentToolsHint: '开启后，这个工作区的会话获得 session_tags_library_list/update 与 session_tags_get/set 四个工具',
-        doneOn: '落完成章',
-        doneOff: '取消完成章',
         menuTags: '标签…',
         headerAdd: '标签',
         rename: '重命名',
@@ -104,7 +101,6 @@ window.__ModuleLoader__.load({
         pending: 'Needs you',
         unread: 'Handed back',
         running: 'Running',
-        done: 'Done',
         idle: 'Idle',
         showArchived: 'Show archived',
         total: 'Total',
@@ -138,8 +134,6 @@ window.__ModuleLoader__.load({
         ungrouped: 'Ungrouped',
         agentTools: 'Let the agent manage tags',
         agentToolsHint: 'When on, sessions in this workspace get the session_tags_library_list/update and session_tags_get/set tools',
-        doneOn: 'Mark done',
-        doneOff: 'Clear done',
         menuTags: 'Tags…',
         headerAdd: 'Tag',
         rename: 'Rename',
@@ -294,11 +288,6 @@ window.__ModuleLoader__.load({
         notify(error.message)
         return false
       }
-    }
-
-    const toggleDone = sessionId => {
-      const done = view.sessions[sessionId]?.done === true
-      return saveSession(sessionId, { done: !done })
     }
 
     const setTags = (sessionId, tagIds) => saveSession(sessionId, { tagIds })
@@ -635,28 +624,12 @@ window.__ModuleLoader__.load({
     /* ------------------------------------------------------------------ */
 
     function RowTags ({ sessionId }) {
-      const { tags, meta } = useSessionMeta(sessionId)
-      if (tags.length === 0 && meta?.done !== true) return null
+      const { tags } = useSessionMeta(sessionId)
+      if (tags.length === 0) return null
       const shown = tags.slice(0, 2)
       return h('span', { className: 'bt-row-tags' },
         shown.map(tag => h(Chip, { key: tag.key, tag })),
-        tags.length > 2 ? h('span', { className: 'bt-more' }, `+${tags.length - 2}`) : null,
-        meta?.done === true
-          ? h('span', { className: 'bt-stamp', title: t('done') }, h(CheckIcon, { size: 10 }))
-          : null)
-    }
-
-    function DoneAction ({ sessionId }) {
-      const { meta } = useSessionMeta(sessionId)
-      const done = meta?.done === true
-      return h('button', {
-        type: 'button',
-        className: 'bt-action' + (done ? ' is-on' : ''),
-        title: t(done ? 'doneOff' : 'doneOn'),
-        'aria-label': t(done ? 'doneOff' : 'doneOn'),
-        'aria-pressed': done,
-        onClick: () => { void toggleDone(sessionId) },
-      }, h(CheckIcon, { size: 12 }))
+        tags.length > 2 ? h('span', { className: 'bt-more' }, `+${tags.length - 2}`) : null)
     }
 
     /* ------------------------------------------------------------------ */
@@ -675,30 +648,17 @@ window.__ModuleLoader__.load({
       }, h(TagIcon, { size: 14 }), t('menuTags'), tags.length > 0 ? h('span', { className: 'bt-menu-count' }, String(tags.length)) : null)
     }
 
-    function MenuDoneItem ({ sessionId, useMenuOpenState }) {
-      const [, setMenuOpen] = useMenuOpenState()
-      const { meta } = useSessionMeta(sessionId)
-      const done = meta?.done === true
-      return h('button', {
-        type: 'button', role: 'menuitem', className: 'bt-menuitem',
-        onClick: () => { setMenuOpen(false); void toggleDone(sessionId) },
-      }, done ? t('doneOff') : t('doneOn'))
-    }
-
     /* ------------------------------------------------------------------ */
     /* session hover card                                                  */
     /* ------------------------------------------------------------------ */
 
     function HoverTags ({ sessionId }) {
-      const { tags, meta } = useSessionMeta(sessionId)
-      if (tags.length === 0 && meta?.done !== true) return null
+      const { tags } = useSessionMeta(sessionId)
+      if (tags.length === 0) return null
       return h('div', { className: 'bt-hover' },
         h('div', { className: 'bt-hover-head' }, t('picker')),
         h('div', { className: 'bt-hover-chips' },
-          tags.map(tag => h(Chip, { key: tag.key, tag })),
-          meta?.done === true
-            ? h('span', { className: 'bt-stamp', title: t('done') }, h(CheckIcon, { size: 10 }))
-            : null))
+          tags.map(tag => h(Chip, { key: tag.key, tag }))))
     }
 
     /* ------------------------------------------------------------------ */
@@ -889,15 +849,13 @@ window.__ModuleLoader__.load({
 
     function statusOf (sessionId, statuses, sessions) {
       const state = statuses?.get?.(sessionId)
-      const done = sessions[sessionId]?.done === true
       if (state?.pendingInteraction != null) return 'pending'
       if (state?.completionUnread === true) return 'unread'
       if (state?.running === true) return 'running'
-      if (done) return 'done'
       return 'idle'
     }
 
-    const RANK = { pending: 0, unread: 1, running: 2, done: 3, idle: 4 }
+    const RANK = { pending: 0, unread: 1, running: 2, idle: 3 }
 
     function OverviewPanel (props) {
       const ids = props.useSessions(state => state.ids)
@@ -930,7 +888,7 @@ window.__ModuleLoader__.load({
         .map(summary => ({ summary, status: statusOf(summary.id, statuses, snap.sessions) }))
         .sort((a, b) => (RANK[a.status] - RANK[b.status]) || ((b.summary.updatedAt ?? 0) - (a.summary.updatedAt ?? 0)))
 
-      const counts = { pending: 0, unread: 0, running: 0, done: 0 }
+      const counts = { pending: 0, unread: 0, running: 0 }
       for (const summary of all) {
         if (archived.has(summary.id) && !showArchived) continue
         const status = statusOf(summary.id, statuses, snap.sessions)
@@ -1010,7 +968,6 @@ window.__ModuleLoader__.load({
           h('span', { className: 'bt-count is-pending' }, t('pending') + ' ', h('b', null, String(counts.pending))),
           h('span', { className: 'bt-count is-unread' }, t('unread') + ' ', h('b', null, String(counts.unread))),
           h('span', { className: 'bt-count is-running' }, t('running') + ' ', h('b', null, String(counts.running))),
-          h('span', { className: 'bt-count is-done' }, t('done') + ' ', h('b', null, String(counts.done))),
           h('span', { className: 'bt-count' }, t('total') + ' ', h('b', null, String(all.length))),
           h('label', { className: 'bt-archived' },
             h('input', { type: 'checkbox', checked: showArchived, onChange: event => setShowArchived(event.target.checked) }),
@@ -1223,11 +1180,7 @@ window.__ModuleLoader__.load({
 .bt-temp-action:hover{background:var(--dsw-alias-bg-3,rgba(127,127,127,.16));color:var(--dsw-alias-text-1,inherit)}
 .bt-swatch.is-temp{background:transparent !important;border:1px dashed currentColor}
 .bt-chip-button:hover{filter:brightness(1.15)}
-.bt-stamp{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:4px;border:1px solid rgba(79,191,130,.55);color:#4fbf82;flex:0 0 auto}
 .bt-more{font-size:9.5px;color:var(--dsw-alias-text-3,rgba(127,127,127,.9));flex:0 0 auto}
-.bt-action{display:grid;place-items:center;width:20px;height:20px;border:0;border-radius:4px;background:transparent;color:var(--dsw-alias-text-3,rgba(120,125,135,.95));cursor:pointer}
-.bt-action:hover{background:var(--dsw-alias-bg-3,rgba(127,127,127,.14));color:var(--dsw-alias-text-1,inherit)}
-.bt-action.is-on{color:#4fbf82}
 .bt-menuitem{display:flex;align-items:center;gap:8px;width:100%;border:0;background:transparent;color:var(--dsw-alias-text-1,inherit);font:inherit;font-size:12px;text-align:left;padding:6px 8px;border-radius:5px;cursor:pointer}
 .bt-menuitem:hover{background:var(--dsw-alias-bg-3,rgba(127,127,127,.14))}
 .bt-menu-count{margin-left:auto;color:var(--dsw-alias-text-3,rgba(127,127,127,.9));font-size:11px}
@@ -1305,7 +1258,6 @@ window.__ModuleLoader__.load({
 .bt-dot.is-pending{background:#f0a35e}
 .bt-dot.is-unread{background:#4fbf82}
 .bt-dot.is-running{background:#5b8cff;box-shadow:0 0 0 3px rgba(91,140,255,.12)}
-.bt-dot.is-done{background:transparent;border:1px solid #4fbf82}
 .bt-empty{padding:22px 4px;color:var(--dsw-alias-text-3,rgba(127,127,127,.9));font-size:12px;display:flex;gap:8px;align-items:center}
 .bt-toast{pointer-events:none;position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--dsw-alias-bg-1,#1e2129);border:1px solid var(--dsw-alias-border-1,rgba(127,127,127,.3));border-radius:8px;padding:8px 12px;font-size:12px;display:flex;gap:10px;align-items:center;box-shadow:0 10px 30px rgba(0,0,0,.4);z-index:2147483001}
 .bt-modal-back{position:fixed;inset:0;background:rgba(0,0,0,.45);display:grid;place-items:center;z-index:2147483002}
@@ -1414,15 +1366,9 @@ window.__ModuleLoader__.load({
       contribute('sidebar.session.row.hover', {
         name: 'sidebar.session.row.hover', id: 'better-tag-hover', order: 10, locale: NS,
       }, HoverTags)
-      contribute('sidebar.workspaces.session.row.action', {
-        name: 'sidebar.workspaces.session.row.action', id: 'better-tag-done', order: 150, locale: NS,
-      }, DoneAction)
       contribute('sidebar.workspaces.session.menu.item', {
         name: 'sidebar.workspaces.session.menu.item', id: 'better-tag-menu-clear-temp', order: 390, locale: NS,
       }, MenuClearTempItem)
-      contribute('sidebar.workspaces.session.menu.item', {
-        name: 'sidebar.workspaces.session.menu.item', id: 'better-tag-menu-done', order: 400, locale: NS,
-      }, MenuDoneItem)
       contribute('sidebar.workspaces.session.menu.item', {
         name: 'sidebar.workspaces.session.menu.item', id: 'better-tag-menu-tags', order: 410, locale: NS,
       }, MenuTagsItem)

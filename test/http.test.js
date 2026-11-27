@@ -104,11 +104,10 @@ test('session writes validate tags against the resolved workspace library', asyn
     const b = await call(base, '/tags', { method: 'POST', body: { workspaceKey: 'ws-b', name: 'b' } })
     const state = await call(base, '/session', {
       method: 'POST',
-      body: { sessionId: 's1', tagIds: [a.json.tag.id, b.json.tag.id], done: true },
+      body: { sessionId: 's1', tagIds: [a.json.tag.id, b.json.tag.id] },
     })
     assert.equal(state.status, 200)
     assert.deepEqual(state.json.sessions.s1.tagIds, [a.json.tag.id])
-    assert.equal(state.json.sessions.s1.done, true)
   })
 })
 

@@ -25,7 +25,7 @@ test('subscribe fires on every committed mutation and unsubscribes cleanly', asy
   await store.setSession({ sessionId: 's1', libraryKey: 'ws-a', tagIds: [tag.id] })
   assert.equal(fired, 2)
   // A no-op write persists nothing and stays silent.
-  assert.equal(await store.clearDone('s1'), false)
+  assert.equal(await store.copyTags('missing', 's9', 'ws-a'), false)
   assert.equal(fired, 2)
 
   dispose()
@@ -38,7 +38,7 @@ test('starts empty and persists a session record across restart', async () => {
   assert.deepEqual(store.state(), { version: 1, libraries: {}, sessions: {} })
 
   const { tag } = await store.createTag({ libraryKey: 'ws-a', name: '报税', color: '#8fd694' })
-  await store.setSession({ sessionId: 'session-a', libraryKey: 'ws-a', tagIds: [tag.id], done: true })
+  await store.setSession({ sessionId: 'session-a', libraryKey: 'ws-a', tagIds: [tag.id] })
 
   const reopened = createStore({ dir, log: logger })
   await reopened.ready
@@ -46,7 +46,6 @@ test('starts empty and persists a session record across restart', async () => {
   assert.equal(state.libraries['ws-a'].tags.length, 1)
   assert.equal(state.libraries['ws-a'].tags[0].name, '报税')
   assert.deepEqual(state.sessions['session-a'].tagIds, [tag.id])
-  assert.equal(state.sessions['session-a'].done, true)
 })
 
 test('a v1 global document migrates: tags become the seed of every new library', async () => {
@@ -54,13 +53,15 @@ test('a v1 global document migrates: tags become the seed of every new library',
   await fs.writeFile(path.join(dir, 'state.json'), JSON.stringify({
     version: 7,
     tags: [{ id: 'tag-1', name: '报税', color: '#8fd694', order: 0, createdAt: 1 }],
-    sessions: { 'session-a': { sessionId: 'session-a', tagIds: ['tag-1'], inlineTags: [], done: true, updatedAt: 1 } },
+    sessions: { 'session-a': { sessionId: 'session-a', tagIds: ['tag-1'], inlineTags: [], done: true, updatedAt: 1 } }, // legacy done field is dropped
   }), 'utf8')
   const store = createStore({ dir, log: logger })
   await store.ready
   // Nothing materializes until a workspace key is touched.
   assert.deepEqual(store.state().libraries, {})
   assert.deepEqual(store.state().sessions['session-a'].tagIds, ['tag-1'])
+  // The retired done stamp does not survive normalization.
+  assert.equal(store.state().sessions['session-a'].done, undefined)
 
   const state = await store.ensureLibraries(['ws-a', 'ws-b'])
   assert.equal(state.libraries['ws-a'].tags[0].id, 'tag-1')
@@ -200,14 +201,6 @@ test('assignByNames rejects a bad name without leaving created tags behind', asy
   assert.equal(store.state().sessions.s1, undefined)
 })
 
-test('clearDone only clears an existing done stamp', async () => {
-  const { store } = await tempStore()
-  assert.equal(await store.clearDone('s1'), false)
-  await store.setSession({ sessionId: 's1', done: true })
-  assert.equal(await store.clearDone('s1'), true)
-  assert.equal(await store.clearDone('s1'), false)
-})
-
 test('inline tags persist, dedupe, cap at eight, and never enter the library', async () => {
   const { store } = await tempStore()
   const inlineTags = [
@@ -223,7 +216,7 @@ test('inline tags persist, dedupe, cap at eight, and never enter the library', a
   assert.equal(reopenedState.sessions.s1.inlineTags.length, 8)
 })
 
-test('fork copies inline tags but not the done stamp, resolving against the library', async () => {
+test('fork copies inline tags, resolving against the library', async () => {
   const { store } = await tempStore()
   const { tag } = await store.createTag({ libraryKey: 'ws-a', name: 'a', color: '#7c9cff' })
   const { tag: foreign } = await store.createTag({ libraryKey: 'ws-b', name: 'b', color: '#f0a35e' })
@@ -232,13 +225,11 @@ test('fork copies inline tags but not the done stamp, resolving against the libr
     libraryKey: 'ws-a',
     tagIds: [tag.id, foreign.id],
     inlineTags: [{ name: '临时', color: '#67c98a' }],
-    done: true,
   })
   assert.equal(await store.copyTags('parent', 'child', 'ws-a'), true)
   const child = store.state().sessions.child
   assert.deepEqual(child.tagIds, [tag.id])
   assert.deepEqual(child.inlineTags, [{ name: '临时', color: '#67c98a' }])
-  assert.equal(child.done, false)
 })
 
 test('inheritFork resolves the library key and skips subagent children', async () => {

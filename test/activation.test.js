@@ -105,24 +105,6 @@ async function call (base, pathname, { method = 'GET', body } = {}) {
   return response.json()
 }
 
-test('activity clears a done stamp through the plugin listener', async () => {
-  const plugin = await startPlugin()
-  try {
-    const created = await call(plugin.base, '/tags', { method: 'POST', body: { sessionId: 's1', name: '报税' } })
-    const tagId = created.tag.id
-    await call(plugin.base, '/session', { method: 'POST', body: { sessionId: 's1', tagIds: [tagId], done: true } })
-
-    await plugin.emit('api-session/activity', 's1', Date.now())
-    const cleared = await waitFor(async () => (await call(plugin.base, '/state')).sessions.s1.done === false)
-    assert.equal(cleared, true)
-
-    const state = await call(plugin.base, '/state')
-    assert.deepEqual(state.sessions.s1.tagIds, [tagId])
-  } finally {
-    await plugin.close()
-  }
-})
-
 test('state maps sessions to workspaces and materializes their libraries', async () => {
   const plugin = await startPlugin()
   try {
@@ -138,12 +120,12 @@ test('state maps sessions to workspaces and materializes their libraries', async
   }
 })
 
-test('a fork created with shared seed events inherits tags but not done', async () => {
+test('a fork created with shared seed events inherits tags', async () => {
   const plugin = await startPlugin()
   try {
     const created = await call(plugin.base, '/tags', { method: 'POST', body: { name: '产品' } })
     const tagId = created.tag.id
-    await call(plugin.base, '/session', { method: 'POST', body: { sessionId: 'parent', tagIds: [tagId], done: true } })
+    await call(plugin.base, '/session', { method: 'POST', body: { sessionId: 'parent', tagIds: [tagId] } })
 
     const first = { type: 'user/message', seq: 0 }
     const parent = { id: 'parent', header: { isSeeded: false }, events: [first] }
@@ -156,7 +138,6 @@ test('a fork created with shared seed events inherits tags but not done', async 
 
     const state = await call(plugin.base, '/state')
     assert.deepEqual(state.sessions.child.tagIds, [tagId])
-    assert.equal(state.sessions.child.done, false)
   } finally {
     await plugin.close()
   }
@@ -175,7 +156,6 @@ test('the controller fork wrapper copies tags to the child', async () => {
 
     const state = await call(plugin.base, '/state')
     assert.deepEqual(state.sessions['child-session'].tagIds, [tagId])
-    assert.equal(state.sessions['child-session'].done, false)
   } finally {
     await plugin.close()
   }

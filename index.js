@@ -2,10 +2,10 @@
  * Host half of dsh-better-tag.
  *
  * Owns the durable per-workspace tag stores and their same-origin API. It
- * never writes Session logs and never touches the agent loop: tags and the
- * done stamp belong to the human. When a workspace flips its model-tools
- * switch on, the four tag tools attach to the scoped context of every agent
- * in that workspace — and only there — so agents elsewhere never see them.
+ * never writes Session logs and never touches the agent loop. When a
+ * workspace flips its model-tools switch on, the four tag tools attach to
+ * the scoped context of every agent in that workspace — and only there — so
+ * agents elsewhere never see them.
  */
 
 import os from 'node:os'
@@ -147,14 +147,6 @@ export function apply (ctx) {
       for (const key of keys) await syncWorkspaceTools(key)
     })
     .catch(error => log.warn?.(`[better-tag] initial agent tools sync failed: ${error.message}`))
-
-  try {
-    disposers.push(ctx.on('api-session/activity', sessionId => {
-      void store.clearDone(String(sessionId)).catch(error => log.warn?.(`[better-tag] clear done failed: ${error.message}`))
-    }))
-  } catch (error) {
-    log.warn?.(`[better-tag] activity listener failed: ${error.message}`)
-  }
 
   try {
     disposers.push(ctx.on('session/created', session => {

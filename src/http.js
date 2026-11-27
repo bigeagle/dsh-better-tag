@@ -197,7 +197,6 @@ export function registerLocalApi ({
             libraryKey: await keyOf(live, body),
             tagIds: body.tagIds,
             inlineTags: body.inlineTags,
-            done: body.done,
             ifVersion: body.ifVersion,
           })
           return send(res, 200, { ok: true, ...state })

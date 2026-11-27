@@ -145,7 +145,6 @@ function normalizeSession (sessionId, record) {
     sessionId,
     tagIds,
     inlineTags: normalizeInlineTags(record?.inlineTags),
-    done: record?.done === true,
     updatedAt: Number.isFinite(record?.updatedAt) ? record.updatedAt : Date.now(),
   }
 }
@@ -319,8 +318,8 @@ export function createStore ({ dir, log = console, rng = Math.random }) {
       return state()
     },
 
-    /** Update one Session's tags and/or done stamp; tagIds resolve inside its workspace library. */
-    async setSession ({ sessionId, libraryKey, tagIds, inlineTags, done, ifVersion } = {}) {
+    /** Update one Session's tags; tagIds resolve inside its workspace library. */
+    async setSession ({ sessionId, libraryKey, tagIds, inlineTags, ifVersion } = {}) {
       await ready
       if (typeof sessionId !== 'string' || sessionId === '') {
         throw new StoreError('bad-session', 'sessionId is required')
@@ -336,7 +335,6 @@ export function createStore ({ dir, log = console, rng = Math.random }) {
         record.inlineTags = normalizeInlineTags(inlineTags, parsed =>
           pickTagColor({ tags: data.libraries[libraryKeyOf(libraryKey)]?.tags ?? [], extra: parsed, rng }))
       }
-      if (typeof done === 'boolean') record.done = done
       data.version += 1
       await persist()
       return state()
@@ -536,19 +534,7 @@ export function createStore ({ dir, log = console, rng = Math.random }) {
       return { report, state: state() }
     },
 
-    /** Clear the done stamp after the user sends a new message. */
-    async clearDone (sessionId) {
-      await ready
-      const record = data.sessions[sessionId]
-      if (!record || record.done !== true) return false
-      record.done = false
-      record.updatedAt = Date.now()
-      data.version += 1
-      await persist()
-      return true
-    },
-
-    /** Copy a parent Session's tags onto a fork; the child never inherits done. */
+    /** Copy a parent Session's tags onto a fork. */
     async copyTags (fromSessionId, toSessionId, libraryKey) {
       await ready
       if (typeof fromSessionId !== 'string' || typeof toSessionId !== 'string') return false
@@ -559,7 +545,6 @@ export function createStore ({ dir, log = console, rng = Math.random }) {
       const child = normalizeSession(toSessionId, data.sessions[toSessionId])
       child.tagIds = parent.tagIds.filter(id => tagById(library, id)).slice(0, MAX_TAGS_PER_SESSION)
       child.inlineTags = (parent.inlineTags ?? []).map(tag => ({ name: tag.name, color: tag.color }))
-      child.done = false
       child.updatedAt = Date.now()
       data.sessions[toSessionId] = child
       data.version += 1

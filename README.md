@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Diomchen/dsh-better-tag/main/docs/banner.png" alt="dsh-better-tag：给会话贴扁平标签，落一枚持久的完成章" width="100%">
+  <img src="https://raw.githubusercontent.com/Diomchen/dsh-better-tag/main/docs/banner.png" alt="dsh-better-tag：给会话贴扁平标签，每个 workspace 一套标签库" width="100%">
 </p>
 
 <h1 align="center">dsh-better-tag</h1>
 
-<p align="center">给 <b>DeepSeek Harness</b> 的会话贴扁平标签，并落一枚持久的「完成」章。</p>
+<p align="center">给 <b>DeepSeek Harness</b> 的会话贴扁平标签，每个 workspace 一套自己的标签库。</p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/dsh-better-tag"><img alt="npm" src="https://img.shields.io/npm/v/dsh-better-tag?color=7c9cff"></a>
@@ -18,7 +18,7 @@
 
 DSH 原生的状态点回答的是「AI 交回了没有」：待你、交回未读、进行中、空闲。它不回答**这件事做完了没有**——因为只有你知道。
 
-`dsh-better-tag` 补上这一层：标签说明这件事**属于什么**，「完成」章说明它**已经收尾**。两者都跟着会话走，重启后还在，发新消息时完成章自动解除。
+`dsh-better-tag` 补上这一层：标签说明这件事**属于什么**。标签跟着会话走，重启后还在。
 
 **0.2 起，标签库按 workspace 管理**：每个 workspace 有自己的一套标签，互不干扰；升级时原全局库会自动复制成每个 workspace 的初始词表。每个 workspace 还可以单独打开 **Agent 标签工具**——开启后，这个 workspace 里的会话会获得 `session_tags_library_list` / `session_tags_library_update` / `session_tags_get` / `session_tags_set` 四个模型工具，AI 可以自主查看和维护标签库、给自己的会话打标（不在库里的名字自动建标签）；没开启的 workspace，模型根本看不到这些工具。
 
@@ -27,7 +27,7 @@ DSH 原生的状态点回答的是「AI 交回了没有」：待你、交回未�
 | 位置 | 你会看到 |
 | --- | --- |
 | 侧栏行尾 | 最多 2 枚标签 + `+N`，排在时间之前；只读，不抢原生按钮 |
-| 行悬停 | 原生 hover 卡片里显示该会话的全部标签与完成章 |
+| 行悬停 | 原生 hover 卡片里显示该会话的全部标签 |
 | 行悬停 / `…` 菜单 | ✓ 落章、取消章；「标签…」打开选择器（触屏兜底） |
 | 会话标题旁 | 最多 3 枚标签 + `+N`；点芯片或「+ 标签」直接增删 |
 | 侧栏「会话总览」 | 按 workspace 分组（可折叠，折叠状态跨刷新保留）：状态计数、每个分组内自己的标签筛选、归档开关、点行进入会话；有待处理会话的工作区自动置顶 |
@@ -52,17 +52,17 @@ DSH 原生的状态点回答的是「AI 交回了没有」：待你、交回未�
 
 <img src="https://raw.githubusercontent.com/Diomchen/dsh-better-tag/main/docs/screenshots/header-tags.png" alt="会话标题旁的三枚标签与 + 标签按钮" width="1000">
 
-### 悬停、完成章与行菜单（示例数据）
+### 悬停与行菜单（示例数据）
 
-行悬停时显示全部标签（含临时标签）与完成章；行尾 ✓ 落章/取消，「…」菜单里还有「标签…」「取消完成章」「清除临时标签」。
+行悬停时显示全部标签（含临时标签）；「…」菜单里有「标签…」「清除临时标签」。
 
-<img src="https://raw.githubusercontent.com/Diomchen/dsh-better-tag/main/docs/screenshots/sidebar-hover.png" alt="侧栏行悬停：全部标签、完成章与落章操作" width="860">
+<img src="https://raw.githubusercontent.com/Diomchen/dsh-better-tag/main/docs/screenshots/sidebar-hover.png" alt="侧栏行悬停：全部标签" width="860">
 
-<img src="https://raw.githubusercontent.com/Diomchen/dsh-better-tag/main/docs/screenshots/row-menu.png" alt="会话行 … 菜单：标签、取消完成章、清除临时标签" width="560">
+<img src="https://raw.githubusercontent.com/Diomchen/dsh-better-tag/main/docs/screenshots/row-menu.png" alt="会话行 … 菜单：标签、清除临时标签" width="560">
 
 ### 会话总览（示例数据）
 
-按 workspace 分组：状态计数（待你 / AI 已交回 / 进行中 / 已完成 / 共）、显示归档开关，点行直接进入会话；组间按组内最紧急的会话排序，有待你 / 交回会话的工作区浮在最上面。点组头折叠/展开（折叠状态跨刷新保留）；每个分组有自己的标签筛选行，只筛本工作区的会话，多个工作区可以同时各筛各的；右上角进入管理标签。
+按 workspace 分组：状态计数（待你 / AI 已交回 / 进行中 / 共）、显示归档开关，点行直接进入会话；组间按组内最紧急的会话排序，有待你 / 交回会话的工作区浮在最上面。点组头折叠/展开（折叠状态跨刷新保留）；每个分组有自己的标签筛选行，只筛本工作区的会话，多个工作区可以同时各筛各的；右上角进入管理标签。
 
 <img src="https://raw.githubusercontent.com/Diomchen/dsh-better-tag/main/docs/screenshots/overview.png" alt="会话总览：状态计数、标签筛选、归档开关与会话列表" width="1000">
 
@@ -106,19 +106,17 @@ dsh plugin --profile web add github:Diomchen/dsh-better-tag
 ## 用法
 
 1. **贴标签**：悬停会话行，点「…」→「标签…」；或打开会话，点标题旁的「+ 标签」。顶部输入框既能搜索也能新建；每行色点直接改色，新建标签会自动分到一个不挤的颜色。每个 workspace 有自己的标签库，选择器只显示当前会话所在 workspace 的词表。
-2. **落完成章**：悬停会话行点 ✓，或「…」菜单里选「落完成章」。它会一直留着，直到你发下一条消息或手动取消。
-3. **找回来**：点侧栏的「会话总览」，按「待你 / AI 已交回 / 进行中 / 已完成」计数看全局；按 workspace 分组的标签筛选，勾「显示归档」把归档会话也拉出来。
-4. **让 AI 自己管标签**：总览 →「管理标签」→ 选中 workspace → 打开「允许 Agent 管理标签」。之后这个 workspace 里的会话就能用 `session_tags_library_list`（看标签库）、`session_tags_library_update`（建/改名/改色/删库标签）、`session_tags_get`（看本会话已贴的标签）、`session_tags_set`（给本会话打标，名字不在库里会自动建）。关掉开关，工具立刻从模型视野里消失。
-5. **分享一套标签**：管理器 →「导出标签包」；别人在选中 workspace 后「导入标签包」，按名字合并，同名不同色会保留本地颜色并报告冲突。
-6. **随手记**：选择器里可以打**临时标签**——不入标签库、跟着这条会话存；常用的话点「固定」收进标签库。
+2. **找回来**：点侧栏的「会话总览」，按「待你 / AI 已交回 / 进行中」计数看全局；每个分组用自己的标签库做组内筛选，勾「显示归档」把归档会话也拉出来。
+3. **让 AI 自己管标签**：总览 →「管理标签」→ 选中 workspace → 打开「允许 Agent 管理标签」。之后这个 workspace 里的会话就能用 `session_tags_library_list`（看标签库）、`session_tags_library_update`（建/改名/改色/删库标签）、`session_tags_get`（看本会话已贴的标签）、`session_tags_set`（给本会话打标，名字不在库里会自动建）。关掉开关，工具立刻从模型视野里消失。
+4. **分享一套标签**：管理器 →「导出标签包」；别人在选中 workspace 后「导入标签包」，按名字合并，同名不同色会保留本地颜色并报告冲突。
+5. **随手记**：选择器里可以打**临时标签**——不入标签库、跟着这条会话存；常用的话点「固定」收进标签库。
 
 ## 它怎么工作
 
 - **Host 半边**把每个 workspace 的标签库与会话记录写成 `~/.dsh/storages/better-tag/state.json`（尊重 `DSH_HOME`），原子写、串行化，不写会话日志。0.1 的全局库在首次读取时迁移为「种子」，每个 workspace 的库在第一次被触及时从种子复制起步，之后各自演化。
 - **Client 半边**通过同源接口 `/dsh-better-tag/v1/*` 读写；每次落盘变更（包括 Agent 工具写入）都通过长轮询变更通道实时推送到所有打开的页面（对会缓冲流式响应的代理也可靠），无需手动刷新。
 - **Agent 标签工具**按 workspace 开关：开启时，工具注册到该 workspace 每个存活 agent 的 scoped context 上（`agent.ctx.tools.register`），agent 销毁自动卸载；没开启的 workspace 的 agent 从系统提示到执行管线都看不到这四个工具。
-- **完成章**监听 `api-session/activity`：会话出现新用户消息时自动解除。
-- **fork**：子会话继承父会话的标签（含临时标签），不继承完成章。优先包 `sessionController.fork`，并以 `session/created` 事件兜底。
+- **fork**：子会话继承父会话的标签（含临时标签）。优先包 `sessionController.fork`，并以 `session/created` 事件兜底。
 
 ## 数据与隐私
 
@@ -153,12 +151,11 @@ npm pack --dry-run   # 看会发出去的包内容
 
 ## English
 
-**dsh-better-tag** puts flat tags on DeepSeek Harness sessions and adds a persistent *done* stamp that only you can set.
+**dsh-better-tag** puts flat tags on DeepSeek Harness sessions, with one tag library per workspace.
 
 - Per-workspace tag libraries: every workspace owns its vocabulary; an upgraded 0.1 global library seeds each workspace's starting copy.
 - Opt-in agent tag tools per workspace: flip the switch and sessions there get `session_tags_library_list` / `session_tags_library_update` / `session_tags_get` / `session_tags_set`, so the agent can read the library, maintain it, and tag its own session (unknown names auto-create). Workspaces without the switch never see the tools.
 - Tags in the sidebar row (before the timestamp), in the native hover card, and beside the session title.
-- A done stamp that survives restarts and clears itself when you send the next message.
 - A **session overview** grouped by workspace — collapsible groups (state survives reloads), the group with the most urgent session floats to the top — with status counts, a tag filter inside each group, and an archive toggle.
 - Temporary per-session tags, named tag packs (JSON export/import per workspace), and tag management with cascade delete.
 - Live sync: every change — including agent tool writes — reaches all open pages through a long-poll change feed, no refresh needed.

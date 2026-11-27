@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Session tags",
-    "description": "Per-workspace session tags with a persistent done stamp: tags in the sidebar row, the hover card and beside the title, a cross-workspace overview with status counts and tag filters, and opt-in per-workspace agent tag tools (session_tags_library_list/update and session_tags_get/set).",
+    "description": "Per-workspace session tags: tags in the sidebar row, the hover card and beside the title, a cross-workspace overview grouped by workspace with per-group tag filters, and opt-in per-workspace agent tag tools (session_tags_library_list/update and session_tags_get/set).",
     "detail": "docs/DETAIL.md"
   }
 }
