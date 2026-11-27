@@ -76,6 +76,8 @@ window.__ModuleLoader__.load({
         settingsTitle: '设置',
         settingLimit: '侧栏标签数量',
         settingLimitHint: '会话行尾最多显示的标签数（0–5）；0 为不显示。悬停卡片与标题旁不受影响。',
+        settingHeaderLimit: '标题栏标签数量',
+        settingHeaderLimitHint: '会话标题旁最多显示的标签数（0–8）；0 为不显示，「+ 标签」按钮保留。',
         ungrouped: '未分组',
         agentTools: '允许 Agent 管理标签',
         agentToolsHint: '开启后，这个工作区的会话获得 session_tags_library_list/update 与 session_tags_get/set 四个工具',
@@ -137,6 +139,8 @@ window.__ModuleLoader__.load({
         settingsTitle: 'Settings',
         settingLimit: 'Sidebar tag chips',
         settingLimitHint: 'Max tag chips on a session row (0-5); 0 hides them. The hover card and title area are unaffected.',
+        settingHeaderLimit: 'Title bar tag chips',
+        settingHeaderLimitHint: 'Max tag chips beside the session title (0-8); 0 hides them, the add button stays.',
         ungrouped: 'Ungrouped',
         agentTools: 'Let the agent manage tags',
         agentToolsHint: 'When on, sessions in this workspace get the session_tags_library_list/update and session_tags_get/set tools',
@@ -676,14 +680,17 @@ window.__ModuleLoader__.load({
     /* ------------------------------------------------------------------ */
 
     function HeaderTags ({ sessionId }) {
-      const { tags } = useSessionMeta(sessionId)
-      const shown = tags.slice(0, 3)
+      const { tags, snap } = useSessionMeta(sessionId)
+      // The settings page caps the chips beside the title (0 hides them);
+      // the add button stays so the picker keeps its entry point.
+      const limit = Math.max(0, snap.settings?.headerTagLimit ?? 3)
+      const shown = tags.slice(0, limit)
       return h('span', { className: 'bt-head-tags' },
         shown.map(tag => h(Chip, {
           key: tag.key, tag, title: t('picker'),
           onClick: event => openPicker(sessionId, event.currentTarget.getBoundingClientRect()),
         })),
-        tags.length > 3 ? h('span', { className: 'bt-more' }, `+${tags.length - 3}`) : null,
+        limit > 0 && tags.length > limit ? h('span', { className: 'bt-more' }, `+${tags.length - limit}`) : null,
         h('button', {
           type: 'button', className: 'bt-add-tag',
           onClick: event => openPicker(sessionId, event.currentTarget.getBoundingClientRect()),
@@ -1178,43 +1185,50 @@ window.__ModuleLoader__.load({
      */
     let tagLimitForm = null
 
-    /** The sidebar-limit row, shared by the plugin's config page and the overview's settings modal. */
-    function TagLimitField () {
+    /** One numeric-limit row over the plugin's settings namespace. */
+    function LimitField ({ name, labelKey, hintKey, max, fallback }) {
       const snap = useSyncExternalStore(
         listener => tagLimitForm.subscribe(listener),
         () => tagLimitForm.getSnapshot(),
       )
       if (snap.status === 'unavailable') return null
-      const raw = snap.value?.sidebarTagLimit
-      const value = Number.isInteger(raw) ? Math.max(0, Math.min(5, raw)) : 2
+      const raw = snap.value?.[name]
+      const value = Number.isInteger(raw) ? Math.max(0, Math.min(max, raw)) : fallback
       const disabled = snap.status !== 'ready' || snap.writable !== true
-      return h(React.Fragment, null,
+      return h('div', { className: 'bt-settings-field' },
         h('label', { className: 'bt-settings-row' },
-          h('span', { className: 'bt-settings-label' }, t('settingLimit')),
+          h('span', { className: 'bt-settings-label' }, t(labelKey)),
           h('select', {
             className: 'bt-input bt-settings-select',
             value: String(value),
             disabled,
             onChange: event => {
               const next = Number(event.target.value)
-              void tagLimitForm.set('sidebarTagLimit', next).then(ok => { if (ok) void refresh() })
+              void tagLimitForm.set(name, next).then(ok => { if (ok) void refresh() })
             },
-          }, [0, 1, 2, 3, 4, 5].map(n => h('option', { key: n, value: String(n) }, String(n))))),
-        h('div', { className: 'bt-settings-hint' }, t('settingLimitHint')))
+          }, Array.from({ length: max + 1 }, (_, n) => h('option', { key: n, value: String(n) }, String(n))))),
+        h('div', { className: 'bt-settings-hint' }, t(hintKey)))
+    }
+
+    /** Both chip-limit fields, shared by the plugin's config page and the overview's settings modal. */
+    function SettingsFields () {
+      return h(React.Fragment, null,
+        h(LimitField, { name: 'sidebarTagLimit', labelKey: 'settingLimit', hintKey: 'settingLimitHint', max: 5, fallback: 2 }),
+        h(LimitField, { name: 'headerTagLimit', labelKey: 'settingHeaderLimit', hintKey: 'settingHeaderLimitHint', max: 8, fallback: 3 }))
     }
 
     function SettingsCard ({ view }) {
       // The detail page also renders this slot as a description fallback;
       // the form belongs on the full page view only.
       if (view !== 'page' || tagLimitForm === null) return null
-      return h('div', { className: 'bt-settings' }, h(TagLimitField))
+      return h('div', { className: 'bt-settings' }, h(SettingsFields))
     }
 
     function SettingsModal () {
       return h('div', { className: 'bt-modal-back', onMouseDown: event => { if (event.target === event.currentTarget) commitUi({ settingsOpen: false }) } },
         h('div', { className: 'bt-modal bt-settings-modal' },
           h('div', { className: 'bt-modal-head' }, t('settingsTitle')),
-          h(TagLimitField),
+          h(SettingsFields),
           h('div', { className: 'bt-modal-foot' },
             h('button', { type: 'button', className: 'bt-btn', onClick: () => commitUi({ settingsOpen: false }) }, t('close')))))
     }
@@ -1301,6 +1315,7 @@ window.__ModuleLoader__.load({
 .bt-settings{padding:10px 2px 2px}
 .bt-settings-modal{width:min(420px,90vw)}
 .bt-icon-btn{display:inline-flex;align-items:center;justify-content:center;padding:0 8px}
+.bt-settings-field + .bt-settings-field{margin-top:12px}
 .bt-settings-row{display:flex;align-items:center;gap:10px}
 .bt-settings-label{font-size:12.5px}
 .bt-settings-select{width:76px;height:26px;flex:0 0 auto}

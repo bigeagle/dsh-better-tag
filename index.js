@@ -21,6 +21,8 @@ export const inject = ['webServer']
 export const Config = z.object({
   /** Tag chips shown on one sidebar session row; 0 hides them, the rest collapse into +N. */
   sidebarTagLimit: z.number().step(1).min(0).max(5).default(2).volatile(),
+  /** Tag chips shown beside the session title; 0 hides them, the add button stays. */
+  headerTagLimit: z.number().step(1).min(0).max(8).default(3).volatile(),
 })
 
 function storeDir () {
@@ -43,6 +45,7 @@ export function apply (ctx, config) {
   // edits; a direct apply without the loader (tests) gets the default.
   const settings = () => ({
     sidebarTagLimit: config?.sidebarTagLimit?.get?.() ?? 2,
+    headerTagLimit: config?.headerTagLimit?.get?.() ?? 3,
   })
 
   /**
