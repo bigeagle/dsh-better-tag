@@ -3,8 +3,9 @@
  *
  * One module-level snapshot feeds every seat: sidebar row chips, the done
  * button, the row menu, the title-adjacent tag editor, and the overview panel.
- * Writes go to the Host's loopback API and replace the snapshot with the
- * response, so every seat stays consistent without a push channel.
+ * Writes replace the snapshot with the response, and the Host's long-poll
+ * change feed pushes every committed change (including agent tool writes) to
+ * every open page, so all seats stay live without a manual refresh.
  */
 
 window.__ModuleLoader__.load({
@@ -16,7 +17,11 @@ window.__ModuleLoader__.load({
 
     const NS = 'better-tag'
     const PANEL_ID = 'better-tag-overview'
-    const API = '/dsh-better-tag/v1'
+    // Resolve against the page base so a prefix-stripping proxy (a tunnel or
+    // reverse proxy serving the GUI under /<prefix>/) keeps working: absolute
+    // paths would escape the prefix. Mirrors how the shell resolves its own
+    // same-origin routes against document.baseURI.
+    const API = new URL('dsh-better-tag/v1', document.baseURI).href
     const HEADER = { 'x-better-tag': '1' }
 
     /** Must match PALETTE in src/store.js; the browser module cannot import it. */
@@ -40,7 +45,6 @@ window.__ModuleLoader__.load({
         running: '进行中',
         done: '已完成',
         idle: '空闲',
-        all: '全部',
         showArchived: '显示归档',
         total: '共',
         export: '导出标签包',
@@ -69,6 +73,10 @@ window.__ModuleLoader__.load({
         promoteColorKept: '标签库已有同名标签，颜色沿用库中的',
         menuClearTemp: '清除临时标签',
         noTags: '还没有标签，先新建一个。',
+        workspace: '工作区',
+        ungrouped: '未分组',
+        agentTools: '允许 Agent 管理标签',
+        agentToolsHint: '开启后，这个工作区的会话获得 session_tags_library_list/update 与 session_tags_get/set 四个工具',
         doneOn: '落完成章',
         doneOff: '取消完成章',
         menuTags: '标签…',
@@ -98,7 +106,6 @@ window.__ModuleLoader__.load({
         running: 'Running',
         done: 'Done',
         idle: 'Idle',
-        all: 'All',
         showArchived: 'Show archived',
         total: 'Total',
         export: 'Export pack',
@@ -127,6 +134,10 @@ window.__ModuleLoader__.load({
         promoteColorKept: 'A library tag kept its own color',
         menuClearTemp: 'Clear temporary tags',
         noTags: 'No tags yet. Create one first.',
+        workspace: 'Workspace',
+        ungrouped: 'Ungrouped',
+        agentTools: 'Let the agent manage tags',
+        agentToolsHint: 'When on, sessions in this workspace get the session_tags_library_list/update and session_tags_get/set tools',
         doneOn: 'Mark done',
         doneOff: 'Clear done',
         menuTags: 'Tags…',
@@ -159,7 +170,10 @@ window.__ModuleLoader__.load({
     /* store                                                               */
     /* ------------------------------------------------------------------ */
 
-    let view = { version: 0, tags: [], sessions: {}, phase: 'loading', error: null, notice: null }
+    let view = {
+      version: 0, libraries: {}, sessions: {}, sessionWorkspaces: {}, workspaces: [],
+      phase: 'loading', error: null, notice: null,
+    }
     let snapshot = view
     const listeners = new Set()
 
@@ -203,7 +217,55 @@ window.__ModuleLoader__.load({
     }
 
     function applyState (json) {
-      commit({ version: json.version, tags: json.tags, sessions: json.sessions, phase: 'ready', error: null })
+      // Snapshots arrive from write responses, /state, and the SSE stream in
+      // no guaranteed order; the store version only moves forward, so a late
+      // older frame must not roll the view back.
+      if (typeof json?.version === 'number' && json.version < view.version) return
+      // Write responses carry {version, libraries, sessions}; only /state and
+      // SSE frames add the session→workspace map and the workspace list, so
+      // keep the previous maps when a response omits them.
+      commit({
+        version: json.version,
+        libraries: json.libraries ?? view.libraries,
+        sessions: json.sessions ?? view.sessions,
+        sessionWorkspaces: json.sessionWorkspaces ?? view.sessionWorkspaces,
+        workspaces: json.workspaces ?? view.workspaces,
+        phase: 'ready',
+        error: null,
+      })
+    }
+
+    /**
+     * Follow the Host's change feed by long-polling `/events?since=<version>`:
+     * the Host holds the request until the store moves past our version, then
+     * answers with the full snapshot. A completed response survives proxies
+     * that buffer streaming bodies (where EventSource stalls), and errors
+     * back off briefly before re-polling.
+     * @returns a disposer stopping the loop.
+     */
+    function startEvents () {
+      let stopped = false
+      const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
+      const loop = async () => {
+        while (!stopped) {
+          try {
+            const response = await fetch(API + '/events?since=' + view.version, {
+              headers: { accept: 'application/json' },
+            })
+            if (stopped) return
+            if (response.ok) {
+              const json = await response.json()
+              if (json?.changed === true) applyState(json)
+              continue
+            }
+            await pause(3000)
+          } catch {
+            if (!stopped) await pause(3000)
+          }
+        }
+      }
+      void loop()
+      return () => { stopped = true }
     }
 
     async function refresh () {
@@ -247,9 +309,24 @@ window.__ModuleLoader__.load({
       return setTags(sessionId, next)
     }
 
-    async function createTag (name, color) {
+    /**
+     * The library one session draws from: the tags of the workspace accounting
+     * it, or the shared ungrouped bucket. A session missing from the map is
+     * newer than the last /state fetch; writes still resolve correctly on the
+     * host, and opening the picker refreshes the map.
+     */
+    function libraryKeyOf (sessionId) {
+      return view.sessionWorkspaces[sessionId] ?? 'ungrouped'
+    }
+
+    function libraryOf (sessionId) {
+      return view.libraries[libraryKeyOf(sessionId)]?.tags ?? []
+    }
+
+    /** Create one library tag; scope is {sessionId} or {workspaceKey}. */
+    async function createTag (scope, name, color) {
       try {
-        const json = await api('/tags', color === undefined ? { name } : { name, color })
+        const json = await api('/tags', color === undefined ? { ...scope, name } : { ...scope, name, color })
         applyState(json)
         return json.tag
       } catch (error) {
@@ -258,15 +335,21 @@ window.__ModuleLoader__.load({
       }
     }
 
-    async function updateTag (id, patch) {
+    async function updateTag (scope, id, patch) {
       try {
-        applyState(await api('/tags/update', { id, ...patch }))
+        applyState(await api('/tags/update', { ...scope, id, ...patch }))
       } catch (error) { notify(error.message) }
     }
 
-    async function deleteTag (id) {
+    async function deleteTag (scope, id) {
       try {
-        applyState(await api('/tags/delete', { id }))
+        applyState(await api('/tags/delete', { ...scope, id }))
+      } catch (error) { notify(error.message) }
+    }
+
+    async function setAgentTools (workspaceKey, enabled) {
+      try {
+        applyState(await api('/agent-tools', { workspaceKey, enabled }))
       } catch (error) { notify(error.message) }
     }
 
@@ -278,7 +361,7 @@ window.__ModuleLoader__.load({
       const name = String(raw ?? '').trim()
       if (name.length < 1) return false
       if (name.length > 16) { notify(t('tempLimit')); return false }
-      const library = view.tags.find(tag => tag.name.toLowerCase() === name.toLowerCase())
+      const library = libraryOf(sessionId).find(tag => tag.name.toLowerCase() === name.toLowerCase())
       if (library !== undefined) {
         const current = view.sessions[sessionId]?.tagIds ?? []
         if (!current.includes(library.id)) await setTags(sessionId, [...current, library.id])
@@ -288,7 +371,7 @@ window.__ModuleLoader__.load({
       const current = inlineTagsOf(sessionId)
       if (current.some(tag => tag.name.toLowerCase() === name.toLowerCase())) return true
       if (current.length >= 8) { notify(t('tempLimit')); return false }
-      return saveSession(sessionId, { inlineTags: [...current, { name, color: chooseColor(current) }] })
+      return saveSession(sessionId, { inlineTags: [...current, { name, color: chooseColor(libraryOf(sessionId), current) }] })
     }
 
     async function removeInlineTag (sessionId, name) {
@@ -299,12 +382,12 @@ window.__ModuleLoader__.load({
       const inline = inlineTagsOf(sessionId).find(tag => tag.name === name)
       if (inline === undefined) return false
       let tagId
-      const existing = view.tags.find(tag => tag.name.toLowerCase() === name.toLowerCase())
+      const existing = libraryOf(sessionId).find(tag => tag.name.toLowerCase() === name.toLowerCase())
       if (existing !== undefined) {
         tagId = existing.id
         if (existing.color !== inline.color) notify(t('promoteColorKept'))
       } else {
-        const created = await createTag(name, inline.color)
+        const created = await createTag({ sessionId }, name, inline.color)
         if (created === null) return false
         tagId = created.id
       }
@@ -314,9 +397,9 @@ window.__ModuleLoader__.load({
       return saveSession(sessionId, { tagIds, inlineTags })
     }
 
-    async function exportPack () {
+    async function exportPack (workspaceKey) {
       try {
-        const json = await api('/export')
+        const json = await api('/export?workspace=' + encodeURIComponent(workspaceKey))
         const blob = new Blob([JSON.stringify(json.pack, null, 2)], { type: 'application/json' })
         const url = URL.createObjectURL(blob)
         const anchor = document.createElement('a')
@@ -329,9 +412,9 @@ window.__ModuleLoader__.load({
       } catch (error) { notify(error.message) }
     }
 
-    async function importPack (pack) {
+    async function importPack (workspaceKey, pack) {
       try {
-        const json = await api('/import', { pack })
+        const json = await api('/import', { workspaceKey, pack })
         applyState(json)
         return json.report
       } catch (error) {
@@ -340,19 +423,18 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function tagOf (id) {
-      return view.tags.find(tag => tag.id === id)
-    }
-
     function sessionTags (sessionId) {
       const meta = view.sessions[sessionId]
       if (meta === undefined) return []
-      const library = meta.tagIds.map(tagOf).filter(Boolean)
+      const library = libraryOf(sessionId)
+      const tags = meta.tagIds
+        .map(id => library.find(tag => tag.id === id))
+        .filter(Boolean)
         .map(tag => ({ ...tag, key: tag.id, ephemeral: false }))
       const inline = (meta.inlineTags ?? []).map(tag => ({
         key: `inline:${tag.name}`, name: tag.name, color: tag.color, ephemeral: true,
       }))
-      return [...library, ...inline]
+      return [...tags, ...inline]
     }
 
     function inlineTagsOf (sessionId) {
@@ -360,13 +442,13 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Pick the palette color used least by the library plus the given extra
-     * tags. Mirrors pickTagColor in src/store.js so temp tags and library tags
-     * spread over the palette the same way.
+     * Pick the palette color used least by the given library plus the given
+     * extra tags. Mirrors pickTagColor in src/store.js so temp tags and
+     * library tags spread over the palette the same way.
      */
-    function chooseColor (extra = [], exclude = null) {
+    function chooseColor (baseTags, extra = [], exclude = null) {
       const counts = new Map()
-      for (const tag of [...view.tags, ...extra]) {
+      for (const tag of [...baseTags, ...extra]) {
         if (typeof tag?.color !== 'string') continue
         counts.set(tag.color, (counts.get(tag.color) ?? 0) + 1)
       }
@@ -399,7 +481,16 @@ window.__ModuleLoader__.load({
     }
     const useOverlay = () => useSyncExternalStore(subscribeOverlay, () => overlaySnapshot, () => overlaySnapshot)
 
-    let ui = { manager: false, importOpen: false, managerQuery: '' }
+    /** Collapsed overview sections survive page reloads; tag filters are per-visit. */
+    const COLLAPSE_KEY = 'dsh-better-tag.overview-collapsed.v1'
+    function loadCollapsed () {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) ?? '{}')
+        return parsed !== null && typeof parsed === 'object' ? parsed : {}
+      } catch { return {} }
+    }
+
+    let ui = { manager: false, importOpen: false, managerQuery: '', managerKey: null, collapsed: loadCollapsed(), tagFilters: {} }
     let uiSnapshot = ui
     const uiListeners = new Set()
     function commitUi (next) {
@@ -417,6 +508,25 @@ window.__ModuleLoader__.load({
 
     function openPicker (sessionId, rect) {
       commitOverlay({ open: true, sessionId, rect })
+      // A session newer than the last /state fetch has no workspace mapping
+      // yet; refresh so the picker shows its workspace's library.
+      void refresh()
+    }
+
+    function toggleCollapsed (key) {
+      const next = { ...ui.collapsed }
+      if (next[key] === true) delete next[key]
+      else next[key] = true
+      try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(next)) } catch { /* ignore */ }
+      commitUi({ collapsed: next })
+    }
+
+    /** Select (or clear, with null) one workspace section's tag filter. */
+    function setTagFilter (key, tagId) {
+      const next = { ...ui.tagFilters }
+      if (tagId === null) delete next[key]
+      else next[key] = tagId
+      commitUi({ tagFilters: next })
     }
     function closePicker () {
       commitOverlay({ open: false })
@@ -443,6 +553,14 @@ window.__ModuleLoader__.load({
         h('circle', { cx: 6.1, cy: 7.8, r: 1.1, fill: 'var(--bt-icon-cut, #1b1d24)' }))
     }
 
+    function ChevronIcon ({ size = 10 }) {
+      return h('svg', { viewBox: '0 0 16 16', width: size, height: size, 'aria-hidden': true },
+        h('path', {
+          d: 'M4 6.2 8 10.2 12 6.2',
+          fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round',
+        }))
+    }
+
     /* ------------------------------------------------------------------ */
     /* shared bits                                                         */
     /* ------------------------------------------------------------------ */
@@ -465,8 +583,10 @@ window.__ModuleLoader__.load({
      * One tag's color dot plus its inline palette. The dot stays visible so a
      * recolor is one click away wherever the tag is listed; the palette is
      * inline (not absolutely positioned) so a scrolling list never clips it.
+     * `base` is the library the tag belongs to, so "random" spreads colors
+     * within that library.
      */
-    function ColorControl ({ tag, onPick }) {
+    function ColorControl ({ tag, base = [], onPick }) {
       const [open, setOpen] = useState(false)
       const wrapRef = useRef(null)
       useEffect(() => {
@@ -500,7 +620,7 @@ window.__ModuleLoader__.load({
             h('button', {
               type: 'button', className: 'bt-color-random',
               title: t('randomColor'),
-              onClick: () => onPick(chooseColor([], tag.color)),
+              onClick: () => onPick(chooseColor(base, [], tag.color)),
             }, t('randomColor')))
           : null)
     }
@@ -621,15 +741,16 @@ window.__ModuleLoader__.load({
       }
       const sessionId = current.sessionId
       const meta = snap.sessions[sessionId]
+      const library = libraryOf(sessionId)
       const selected = new Set(meta?.tagIds ?? [])
       const inline = inlineTagsOf(sessionId)
       const queryName = query.trim()
       const needle = queryName.toLowerCase()
-      const exactMatch = queryName !== '' && snap.tags.some(tag => tag.name.toLowerCase() === needle)
+      const exactMatch = queryName !== '' && library.some(tag => tag.name.toLowerCase() === needle)
       const canCreate = queryName !== '' && queryName.length <= 16 && !exactMatch
       const matching = needle === ''
-        ? snap.tags
-        : snap.tags.filter(tag => tag.name.toLowerCase().includes(needle))
+        ? library
+        : library.filter(tag => tag.name.toLowerCase().includes(needle))
       const rect = current.rect
       const width = 264
       const left = Math.max(8, Math.min(rect?.left ?? 16, window.innerWidth - width - 8))
@@ -644,7 +765,7 @@ window.__ModuleLoader__.load({
       const createFromQuery = async () => {
         const name = queryName
         if (name === '' || name.length > 16) return
-        const tag = await createTag(name, chooseColor())
+        const tag = await createTag({ sessionId }, name, chooseColor(library))
         if (tag === null) return
         setQuery('')
         await toggleTag(sessionId, tag.id)
@@ -690,7 +811,7 @@ window.__ModuleLoader__.load({
             title: t('clearSearch'), 'aria-label': t('clearSearch'),
             onClick: () => setQuery(''),
           }, '×'))
-      const empty = snap.tags.length === 0
+      const empty = library.length === 0
         ? h('div', { className: 'bt-picker-empty' }, t('noTags'))
         : (needle !== '' && matching.length === 0
             ? h('div', { className: 'bt-picker-empty' }, t('noMatch'))
@@ -712,13 +833,13 @@ window.__ModuleLoader__.load({
       h('span', { className: 'bt-swatch', style: { background: tag.color } }),
       h('span', { className: 'bt-pick-name' }, tag.name),
       selected.has(tag.id) ? h('span', { className: 'bt-pick-check' }, h(CheckIcon, { size: 11 })) : null),
-      h(ColorControl, { tag, onPick: color => { void updateTag(tag.id, { color }) } })))
+      h(ColorControl, { tag, base: library, onPick: color => { void updateTag({ sessionId }, tag.id, { color }) } })))
       const list = h('div', { className: 'bt-picker-list' }, rows)
       const manage = h('button', {
         type: 'button', className: 'bt-link',
         onClick: () => {
           closePicker()
-          commitUi({ manager: true, managerQuery: query.trim() })
+          commitUi({ manager: true, managerQuery: query.trim(), managerKey: libraryKeyOf(sessionId) })
           selectPanel(PANEL_ID)
         },
       }, t('manageFromPicker'))
@@ -781,22 +902,22 @@ window.__ModuleLoader__.load({
     function OverviewPanel (props) {
       const ids = props.useSessions(state => state.ids)
       const byId = props.useSessions(state => state.byId)
-      const workspaceItems = props.useWorkspaces(state => state.items)
       const archivedIds = props.useWorkspaces(state => state.archivedSessionIds)
       const statuses = props.useSessionStatus(map => map)
       const snap = useStore()
       const currentUi = useUi()
-      const [filterTag, setFilterTag] = useState(null)
       const [showArchived, setShowArchived] = useState(false)
       const [importText, setImportText] = useState('')
       const [report, setReport] = useState(null)
       const fileRef = useRef(null)
 
+      // Sessions or workspaces created after the last /state fetch group
+      // under the wrong section until a refresh lands.
+      useEffect(() => { void refresh() }, [])
+
       const archived = new Set(archivedIds ?? [])
-      const workspaceOf = new Map()
-      for (const workspace of workspaceItems ?? []) {
-        for (const sessionId of workspace.sessionIds ?? []) workspaceOf.set(sessionId, workspace.title ?? workspace.path)
-      }
+      const collapsed = currentUi.collapsed ?? {}
+      const tagFilters = currentUi.tagFilters ?? {}
 
       const all = []
       for (const id of ids ?? []) {
@@ -806,7 +927,6 @@ window.__ModuleLoader__.load({
       }
       const visible = all
         .filter(summary => showArchived || !archived.has(summary.id))
-        .filter(summary => filterTag === null || (snap.sessions[summary.id]?.tagIds ?? []).includes(filterTag))
         .map(summary => ({ summary, status: statusOf(summary.id, statuses, snap.sessions) }))
         .sort((a, b) => (RANK[a.status] - RANK[b.status]) || ((b.summary.updatedAt ?? 0) - (a.summary.updatedAt ?? 0)))
 
@@ -816,6 +936,39 @@ window.__ModuleLoader__.load({
         const status = statusOf(summary.id, statuses, snap.sessions)
         if (counts[status] !== undefined) counts[status] += 1
       }
+
+      // Group by the session's tag library (its workspace), mirroring the
+      // per-workspace libraries. A group inherits its most urgent session's
+      // rank, so a workspace with something waiting still floats to the top;
+      // rows keep the flat list's status-then-recency order inside a group.
+      // Each section carries its own tag filter over that workspace's library;
+      // group ordering reads unfiltered rows so filtering never reorders the page.
+      const grouped = new Map()
+      for (const row of visible) {
+        const key = libraryKeyOf(row.summary.id)
+        if (!grouped.has(key)) grouped.set(key, [])
+        grouped.get(key).push(row)
+      }
+      const wsTitles = new Map((snap.workspaces ?? []).map(entry => [entry.key, entry.title]))
+      const sections = [...grouped.entries()].map(([key, rows]) => {
+        const tags = snap.libraries[key]?.tags ?? []
+        const raw = tagFilters[key] ?? null
+        // A filter naming a since-deleted tag reads as no filter.
+        const filterId = raw !== null && tags.some(tag => tag.id === raw) ? raw : null
+        const shown = filterId === null
+          ? rows
+          : rows.filter(row => (snap.sessions[row.summary.id]?.tagIds ?? []).includes(filterId))
+        return {
+          key,
+          title: wsTitles.get(key) ?? (key === 'ungrouped' ? t('ungrouped') : key),
+          rows,
+          shown,
+          tags,
+          filterId,
+          rank: Math.min(...rows.map(row => RANK[row.status])),
+          latest: Math.max(...rows.map(row => row.summary.updatedAt ?? 0)),
+        }
+      }).sort((a, b) => (a.rank - b.rank) || (b.latest - a.latest))
 
       const openSession = sessionId => {
         try { openSessionById(sessionId) } catch { /* ignore */ }
@@ -830,7 +983,7 @@ window.__ModuleLoader__.load({
           notify(t('importBad'))
           return
         }
-        const result = await importPack(pack)
+        const result = await importPack(currentUi.managerKey ?? 'ungrouped', pack)
         if (result !== null) {
           setReport(result)
           setImportText('')
@@ -849,75 +1002,138 @@ window.__ModuleLoader__.load({
             h('h2', { className: 'bt-panel-title' }, t('title')),
             h('div', { className: 'bt-panel-sub' }, t('subtitle'))),
           h('div', { className: 'bt-toolbar' },
-            h('button', { type: 'button', className: 'bt-btn', onClick: () => { void exportPack() } }, t('export')),
-            h('button', { type: 'button', className: 'bt-btn', onClick: () => commitUi({ importOpen: true }) }, t('import')),
-            h('button', { type: 'button', className: 'bt-btn', onClick: () => commitUi({ manager: true, managerQuery: '' }) }, t('manage')))),
+            h('button', {
+              type: 'button', className: 'bt-btn',
+              onClick: () => { commitUi({ manager: true, managerQuery: '', managerKey: groups[0]?.key ?? snap.workspaces?.[0]?.key ?? 'ungrouped' }) },
+            }, t('manage')))),
         h('div', { className: 'bt-counts' },
           h('span', { className: 'bt-count is-pending' }, t('pending') + ' ', h('b', null, String(counts.pending))),
           h('span', { className: 'bt-count is-unread' }, t('unread') + ' ', h('b', null, String(counts.unread))),
           h('span', { className: 'bt-count is-running' }, t('running') + ' ', h('b', null, String(counts.running))),
           h('span', { className: 'bt-count is-done' }, t('done') + ' ', h('b', null, String(counts.done))),
-          h('span', { className: 'bt-count' }, t('total') + ' ', h('b', null, String(all.length)))),
-        h('div', { className: 'bt-filters' },
-          h('button', {
-            type: 'button', className: 'bt-filter' + (filterTag === null ? ' is-on' : ''),
-            onClick: () => setFilterTag(null),
-          }, t('all')),
-          snap.tags.map(tag => h('button', {
-            key: tag.id, type: 'button',
-            className: 'bt-filter' + (filterTag === tag.id ? ' is-on' : ''),
-            style: filterTag === tag.id ? { borderColor: tag.color, color: tag.color } : undefined,
-            onClick: () => setFilterTag(filterTag === tag.id ? null : tag.id),
-          }, tag.name)),
+          h('span', { className: 'bt-count' }, t('total') + ' ', h('b', null, String(all.length))),
           h('label', { className: 'bt-archived' },
             h('input', { type: 'checkbox', checked: showArchived, onChange: event => setShowArchived(event.target.checked) }),
             t('showArchived'))),
         snap.phase === 'error' ? h('div', { className: 'bt-empty' },
           t('loadError'), h('button', { type: 'button', className: 'bt-btn', onClick: () => { void refresh() } }, t('retry'))) : null,
-        visible.length === 0 ? h('div', { className: 'bt-empty' }, t('empty')) : null,
+        sections.length === 0 ? h('div', { className: 'bt-empty' }, t('empty')) : null,
         h('div', { className: 'bt-list' },
-          visible.map(({ summary, status }) => h('div', {
-            key: summary.id,
-            className: 'bt-row',
-            role: 'button',
-            tabIndex: 0,
-            onClick: () => openSession(summary.id),
-            onKeyDown: event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openSession(summary.id) } },
-          },
-          h('span', { className: `bt-dot is-${status}` }),
-          h('span', { className: 'bt-row-title' }, summary.displayTitle || summary.title || String(summary.id)),
-          h('span', { className: 'bt-row-ws' }, workspaceOf.get(summary.id) ?? '—'),
-          h('span', { className: 'bt-row-tags' },
-            sessionTags(summary.id).slice(0, 3).map(tag => h(Chip, { key: tag.key, tag })),
-            sessionTags(summary.id).length > 3 ? h('span', { className: 'bt-more' }, `+${sessionTags(summary.id).length - 3}`) : null),
-          h('span', { className: 'bt-row-status' }, t(status))))),
+          sections.map(group => {
+            const isCollapsed = collapsed[group.key] === true
+            return h('div', { key: group.key, className: 'bt-group' },
+              h('div', {
+                className: 'bt-group-head',
+                role: 'button',
+                tabIndex: 0,
+                'aria-expanded': !isCollapsed,
+                onClick: () => toggleCollapsed(group.key),
+                onKeyDown: event => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return
+                  event.preventDefault()
+                  toggleCollapsed(group.key)
+                },
+              },
+              h('span', { className: 'bt-chevron' + (isCollapsed ? ' is-collapsed' : '') }, h(ChevronIcon, { size: 10 })),
+              h('span', { className: 'bt-group-title' }, group.title),
+              h('span', { className: 'bt-group-count' },
+                group.filterId !== null ? `${group.shown.length}/${group.rows.length}` : String(group.rows.length))),
+              !isCollapsed && group.tags.length > 0
+                ? h('div', { className: 'bt-group-tags' },
+                  group.tags.map(tag => h('button', {
+                    key: tag.id, type: 'button',
+                    className: 'bt-filter' + (group.filterId === tag.id ? ' is-on' : ''),
+                    style: group.filterId === tag.id ? { borderColor: tag.color, color: tag.color } : undefined,
+                    onClick: () => setTagFilter(group.key, group.filterId === tag.id ? null : tag.id),
+                  }, tag.name)))
+                : null,
+              isCollapsed
+                ? null
+                : group.shown.length === 0
+                  ? h('div', { className: 'bt-group-empty' }, t('empty'))
+                  : h('div', { className: 'bt-group-rows' },
+                    group.shown.map(({ summary, status }) => h('div', {
+                      key: summary.id,
+                      className: 'bt-row',
+                      role: 'button',
+                      tabIndex: 0,
+                      onClick: () => openSession(summary.id),
+                      onKeyDown: event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openSession(summary.id) } },
+                    },
+                    h('span', { className: `bt-dot is-${status}` }),
+                    h('span', { className: 'bt-row-title' }, summary.displayTitle || summary.title || String(summary.id)),
+                    h('span', { className: 'bt-row-tags' },
+                      sessionTags(summary.id).slice(0, 3).map(tag => h(Chip, { key: tag.key, tag })),
+                      sessionTags(summary.id).length > 3 ? h('span', { className: 'bt-more' }, `+${sessionTags(summary.id).length - 3}`) : null),
+                    h('span', { className: 'bt-row-status' }, t(status))))))
+          })),
         report !== null ? h('div', { className: 'bt-toast' },
           t('importReportTitle') + ' · ' + t('importReport', {
             added: report.added.length, skipped: report.skipped.length, conflicts: report.conflicts.length,
           }),
           h('button', { type: 'button', className: 'bt-link', onClick: () => setReport(null) }, t('close'))) : null,
-        currentUi.manager ? h(ManagerModal, { snap, initialQuery: currentUi.managerQuery }) : null,
+        currentUi.manager ? h(ManagerModal, {
+          snap,
+          initialQuery: currentUi.managerQuery,
+          selectedKey: currentUi.managerKey,
+          onSelectKey: key => commitUi({ managerKey: key }),
+        }) : null,
         currentUi.importOpen ? h(ImportModal, { importText, setImportText, onPick: pickFile, onRun: doImport, fileRef }) : null)
     }
 
-    function ManagerModal ({ snap, initialQuery = '' }) {
+    function ManagerModal ({ snap, initialQuery = '', selectedKey, onSelectKey }) {
       const [query, setQuery] = useState(initialQuery)
+      // A workspace created after the last /state fetch is missing from the
+      // selector until a refresh lands.
+      useEffect(() => { void refresh() }, [])
+      // Every registered workspace, plus orphaned libraries whose workspace is
+      // gone but whose tags still exist (renames and exports keep working).
+      const options = []
+      const listed = new Set()
+      for (const entry of snap.workspaces ?? []) {
+        listed.add(entry.key)
+        options.push({ key: entry.key, title: entry.title })
+      }
+      for (const key of Object.keys(snap.libraries ?? {})) {
+        if (!listed.has(key)) options.push({ key, title: key === 'ungrouped' ? t('ungrouped') : key })
+      }
+      if (options.length === 0) options.push({ key: 'ungrouped', title: t('ungrouped') })
+      const key = selectedKey ?? options[0].key
+      const scope = { workspaceKey: key }
+      const tags = snap.libraries[key]?.tags ?? []
+      const agentTools = snap.libraries[key]?.agentTools === true
       // Short lists scan faster without a filter; long lists need one. A query
       // carried in from the picker keeps the field visible so the user does not
       // lose the context they just typed.
-      const showSearch = snap.tags.length >= SEARCH_THRESHOLD || initialQuery !== '' || query !== ''
+      const showSearch = tags.length >= SEARCH_THRESHOLD || initialQuery !== '' || query !== ''
       const needle = showSearch ? query.trim().toLowerCase() : ''
       const matching = needle === ''
-        ? snap.tags
-        : snap.tags.filter(tag => tag.name.toLowerCase().includes(needle))
+        ? tags
+        : tags.filter(tag => tag.name.toLowerCase().includes(needle))
       return h('div', { className: 'bt-modal-back', onMouseDown: event => { if (event.target === event.currentTarget) commitUi({ manager: false }) } },
         h('div', { className: 'bt-modal' },
           h('div', { className: 'bt-modal-head bt-manager-head' },
             h('span', null, t('manage')),
-            showSearch && snap.tags.length > 0
-              ? h('span', { className: 'bt-manager-count' }, `${matching.length}/${snap.tags.length}`)
+            showSearch && tags.length > 0
+              ? h('span', { className: 'bt-manager-count' }, `${matching.length}/${tags.length}`)
               : null),
-          showSearch && snap.tags.length > 0
+          h('label', { className: 'bt-manager-ws' },
+            h('span', { className: 'bt-manager-ws-label' }, t('workspace')),
+            h('select', {
+              className: 'bt-input bt-manager-ws-select',
+              value: key,
+              onChange: event => onSelectKey(event.target.value),
+            }, options.map(option => h('option', { key: option.key, value: option.key }, option.title)))),
+          h('label', { className: 'bt-switch-row' },
+            h('input', {
+              type: 'checkbox',
+              checked: agentTools,
+              onChange: event => { void setAgentTools(key, event.target.checked) },
+            }),
+            h('span', { className: 'bt-switch-text' },
+              h('span', null, t('agentTools')),
+              h('span', { className: 'bt-switch-hint' }, t('agentToolsHint')))),
+          showSearch && tags.length > 0
             ? h('div', { className: 'bt-search-row bt-manager-search' },
               h('input', {
                 className: 'bt-input bt-search', value: query, placeholder: t('searchPlaceholder'),
@@ -934,8 +1150,8 @@ window.__ModuleLoader__.load({
                 }, '×'))
             : null,
           h('div', { className: 'bt-manager' },
-            snap.tags.length === 0 ? h('div', { className: 'bt-picker-empty' }, t('noTags')) : null,
-            showSearch && snap.tags.length > 0 && matching.length === 0
+            tags.length === 0 ? h('div', { className: 'bt-picker-empty' }, t('noTags')) : null,
+            showSearch && tags.length > 0 && matching.length === 0
               ? h('div', { className: 'bt-picker-empty' }, t('noMatch'))
               : null,
             matching.map(tag => h('div', { key: tag.id, className: 'bt-manager-row' },
@@ -943,7 +1159,7 @@ window.__ModuleLoader__.load({
                 className: 'bt-input bt-manager-name',
                 defaultValue: tag.name,
                 maxLength: 16,
-                onBlur: event => { if (event.target.value.trim() !== tag.name) void updateTag(tag.id, { name: event.target.value }) },
+                onBlur: event => { if (event.target.value.trim() !== tag.name) void updateTag(scope, tag.id, { name: event.target.value }) },
                 onKeyDown: event => {
                   if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return
                   event.preventDefault()
@@ -951,12 +1167,14 @@ window.__ModuleLoader__.load({
                   event.currentTarget.blur()
                 },
               }),
-              h(ColorControl, { tag, onPick: color => { void updateTag(tag.id, { color }) } }),
+              h(ColorControl, { tag, base: tags, onPick: color => { void updateTag(scope, tag.id, { color }) } }),
               h('button', {
                 type: 'button', className: 'bt-btn bt-danger bt-manager-delete',
-                onClick: () => { if (window.confirm(t('deleteConfirm'))) void deleteTag(tag.id) },
+                onClick: () => { if (window.confirm(t('deleteConfirm'))) void deleteTag(scope, tag.id) },
               }, t('delete'))))),
-          h('div', { className: 'bt-modal-foot' },
+          h('div', { className: 'bt-modal-foot bt-manager-foot' },
+            h('button', { type: 'button', className: 'bt-btn', onClick: () => { void exportPack(key) } }, t('export')),
+            h('button', { type: 'button', className: 'bt-btn', onClick: () => commitUi({ importOpen: true }) }, t('import')),
             h('button', { type: 'button', className: 'bt-btn', onClick: () => commitUi({ manager: false }) }, t('close')))))
     }
 
@@ -1065,15 +1283,22 @@ window.__ModuleLoader__.load({
 .bt-count.is-pending b{color:#f0a35e}
 .bt-count.is-unread b{color:#4fbf82}
 .bt-count.is-running b{color:#5b8cff}
-.bt-filters{display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
 .bt-filter{height:22px;border-radius:999px;border:1px solid var(--dsw-alias-border-2,rgba(127,127,127,.35));background:transparent;color:var(--dsw-alias-text-3,rgba(127,127,127,.95));font:inherit;font-size:11px;padding:0 9px;cursor:pointer}
 .bt-filter.is-on{border-color:#4a5a8a;background:rgba(74,90,138,.18);color:var(--dsw-alias-text-1,inherit)}
-.bt-archived{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--dsw-alias-text-3,rgba(127,127,127,.9));margin-left:6px}
+.bt-archived{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--dsw-alias-text-3,rgba(127,127,127,.9));margin-left:auto}
 .bt-list{display:flex;flex-direction:column;gap:1px}
+.bt-group + .bt-group{margin-top:12px}
+.bt-group-head{display:flex;align-items:center;gap:6px;padding:3px 9px 6px;border-radius:6px;cursor:pointer;user-select:none}
+.bt-group-head:hover{background:var(--dsw-alias-bg-3,rgba(127,127,127,.1))}
+.bt-chevron{display:inline-flex;color:var(--dsw-alias-text-3,rgba(127,127,127,.9));transition:transform .12s ease}
+.bt-chevron.is-collapsed{transform:rotate(-90deg)}
+.bt-group-title{font-size:11.5px;font-weight:600;letter-spacing:.3px;color:var(--dsw-alias-text-2,rgba(190,195,205,.95))}
+.bt-group-count{font-size:10px;color:var(--dsw-alias-text-3,rgba(127,127,127,.85))}
+.bt-group-tags{display:flex;gap:5px;flex-wrap:wrap;align-items:center;padding:1px 9px 0 25px}
+.bt-group-empty{padding:2px 9px 8px 25px;font-size:11.5px;color:var(--dsw-alias-text-3,rgba(127,127,127,.85))}
 .bt-row{display:flex;align-items:center;gap:10px;padding:7px 9px;border-radius:7px;cursor:pointer;min-width:0}
 .bt-row:hover{background:var(--dsw-alias-bg-3,rgba(127,127,127,.12))}
 .bt-row-title{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
-.bt-row-ws{flex:0 0 96px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;color:var(--dsw-alias-text-3,rgba(127,127,127,.9))}
 .bt-row-tags{display:flex;gap:3px;flex:0 1 auto;overflow:hidden;max-width:240px}
 .bt-row-status{flex:0 0 62px;text-align:right;font-size:11px;color:var(--dsw-alias-text-3,rgba(127,127,127,.95));white-space:nowrap}
 .bt-dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;background:#454a55}
@@ -1088,6 +1313,15 @@ window.__ModuleLoader__.load({
 .bt-modal-head{font-size:14px;font-weight:600;margin-bottom:8px}
 .bt-modal-hint{font-size:12px;color:var(--dsw-alias-text-3,rgba(127,127,127,.9));margin-bottom:8px}
 .bt-manager{display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow:auto}
+.bt-manager-ws{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.bt-manager-ws-label{font-size:12px;color:var(--dsw-alias-text-3,rgba(127,127,127,.95));flex:0 0 auto}
+.bt-manager-ws-select{flex:1;min-width:0;height:28px}
+.bt-switch-row{display:flex;align-items:flex-start;gap:8px;padding:8px;border:1px solid var(--dsw-alias-border-1,rgba(127,127,127,.25));border-radius:8px;margin-bottom:8px;cursor:pointer}
+.bt-switch-row input{margin-top:2px}
+.bt-switch-text{display:flex;flex-direction:column;gap:2px;font-size:12px}
+.bt-switch-hint{font-size:11px;color:var(--dsw-alias-text-3,rgba(127,127,127,.9))}
+.bt-manager-foot{justify-content:flex-start}
+.bt-manager-foot .bt-btn:last-child{margin-left:auto}
 .bt-manager-head{display:flex;align-items:center;gap:8px}
 .bt-manager-count{margin-left:auto;font-size:11px;font-weight:400;color:var(--dsw-alias-text-3,rgba(127,127,127,.9))}
 .bt-manager-search{margin-bottom:8px}
@@ -1165,6 +1399,13 @@ window.__ModuleLoader__.load({
         } catch (error) {
           console.warn('[dsh-better-tag] slot registration failed', ownerKey, error)
         }
+      }
+
+      try {
+        const stopEvents = startEvents()
+        if (stopEvents !== null) disposers.push(stopEvents)
+      } catch (error) {
+        console.warn('[dsh-better-tag] events stream failed', error)
       }
 
       contribute('sidebar.session.row.trailing', {
